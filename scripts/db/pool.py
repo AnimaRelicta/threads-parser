@@ -2,7 +2,8 @@
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import TypeVar
 
 import asyncpg
@@ -64,6 +65,16 @@ async def connect(st: Settings) -> asyncpg.Connection:
         raise _explain(e) from e
     await _init_conn(conn)
     return conn
+
+
+@asynccontextmanager
+async def connection(st: Settings) -> AsyncIterator[asyncpg.Connection]:
+    """`async with connection(st) as conn:` — короткое соединение внутри работающего цикла."""
+    conn = await connect(st)
+    try:
+        yield conn
+    finally:
+        await conn.close()
 
 
 def run_sync(st: Settings, fn: Callable[[asyncpg.Connection], Awaitable[T]]) -> T:

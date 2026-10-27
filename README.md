@@ -19,7 +19,7 @@ threads-parser/
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
 │   ├── dbadmin.py     # CLI: Postgres (migrate/status)
 │   ├── core/  db/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
-├── data/              # профили, куки, реестр, результаты профильного парсера
+├── data/              # профили, куки, результаты профильного парсера (реестр аккаунтов в Postgres)
 ├── output/search/     # результаты поиска (posts.jsonl, jobs.json)
 ├── docs/              # ТЗ на перенос в Postgres и рабочие заметки
 ├── ruff.toml          # единый стиль кода
@@ -67,11 +67,20 @@ uv run scripts/cli.py parse --help                                  # справ
 |---|---|---|
 | `pool.py` | Подключение: пул asyncpg, разовые запросы из синхронного кода. | `SCHEMA`, `require_url`, `create_pool`, `connect`, `run_sync` |
 | `migrate.py` | Миграции `db/migrations/*.sql` по порядку, учёт в `schema_migrations`. | `list_migrations`, `migrate`, `status` |
+| `accounts.py` | Таблица `accounts`: чтение, вход, обновление, итог запуска, импорт старого реестра. | `fetch_accounts`, `register_login`, `update_account`, `mark_run`, `import_legacy` |
+| `runs.py` | Запуски: `runs`, `run_accounts`, `profile_runs`. | `start_run`, `finalize_run`, `save_profile_runs`, `ensure_profile` |
+| `stats.py` | Реестр отчётов (SQL + заголовок) и вывод таблицей. | `Report`, `REPORTS`, `run_report`, `format_table` |
 | `migrations/001_init.sql` | Начальная схема (аккаунты, запуски, профили, посты, комментарии, медиа, поиск, темы). | |
 
 Подготовка: `DATABASE_URL` в `scripts/.env`, затем `uv run scripts/cli.py db migrate`;
-состояние: `uv run scripts/cli.py db status`. Остальной код пока пишет в JSON-файлы,
-перенос идёт поэтапно.
+состояние: `uv run scripts/cli.py db status`. Перенос идёт поэтапно: в БД уже живут
+реестр аккаунтов и записи запусков (`runs`, `run_accounts`, `profile_runs`); посты,
+комментарии, якоря и задачи поиска пока пишутся в JSON-файлы.
+
+Аккаунты из старого `data/accounts.json` переносятся один раз:
+`uv run scripts/dbadmin.py import-accounts` (только записи аккаунтов; счётчики и `runs[]`
+старого файла не переносятся). Прокси аккаунта: `uv run scripts/accounts.py proxy NAME URL`.
+Новый отчёт для `accounts.py list` и других команд добавляется записью в `db/stats.py`.
 
 ### `browser/` — Браузер и аккаунт-воркер
 
@@ -80,13 +89,13 @@ uv run scripts/cli.py parse --help                                  # справ
 | `net.py` | Сетевое состояние одного воркера. | `Net` |
 | `launch.py` | Запуск Chromium: прокси и контекст. | `proxy_settings`, `account_proxy`, `launch_browser`, `new_context` |
 | `session.py` | Сессия аккаунта: куки, проверка входа, определение имени пользователя. | `load_cookies`, `save_cookies`, `has_session`, `check_session`, `USER_ID_KEYS`, `NAV_PROFILE_JS` … |
-| `account.py` | Аккаунт-воркер: браузер, куки, прокси, статистика в реестре. | `Account`, `mark_account` |
+| `account.py` | Аккаунт-воркер: браузер, куки, прокси. | `Account` |
 
 ### `registry/` — Реестр аккаунтов и команды `accounts.py`
 
 | Модуль | Назначение | Основное содержимое |
 |---|---|---|
-| `store.py` | Реестр аккаунтов data/accounts.json и синхронизация файлов кук с ним. | `now_iso`, `load_registry`, `save_registry`, `new_record`, `STAT_KEYS`, `STAT_FROM_WORKER` … |
+| `store.py` | Реестр аккаунтов в Postgres (таблица `accounts`) и синхронизация файлов кук с ним; функции асинхронные. | `now_iso`, `load_registry`, `get_account`, `register_login`, `update_account`, `pick_accounts` … |
 | `cookies.py` | Куки аккаунтов: разбор и нормализация чужих форматов. | `DEFAULT_USER_AGENT`, `SAMESITE`, `cookie_jar`, `normalize_cookie` |
 | `login.py` | Ручной вход в аккаунт в окне браузера. | `confirm`, `dup_question`, `login_account`, `login_into` |
 | `commands.py` | Команды accounts.py: add, relogin, check, import, export, list. | `cmd_add`, `cmd_relogin`, `cmd_check`, `import_blob`, `collect_bundle`, `cmd_import` … |
@@ -107,7 +116,7 @@ uv run scripts/cli.py parse --help                                  # справ
 | `posts.py` | Сбор и обновление одного поста; читаемый captions.txt. | `comment_lines`, `LEGACY_POST_KEYS`, `normalize_post`, `write_captions`, `scrape_post`, `refresh_comments` … |
 | `anchor.py` | anchor.json: метка самого нового поста для режима «только новое». | `ANCHOR_NAME`, `DEFAULT_STOP_AFTER`, `read_anchor`, `anchor_covers`, `write_anchor`, `save_anchor` |
 | `profile.py` | Обработка одного профиля. | `run_profile` |
-| `report.py` | Итоги запуска: счётчики, записи журнала, сводка. | `media_totals`, `profile_run_entry`, `print_summary`, `run_totals` |
+| `report.py` | Итоги запуска: счётчики, записи журнала, сводка. | `media_totals`, `profile_run_entry`, `print_summary` |
 | `dispatch.py` | Очередь профилей и воркеры n x m; точка запуска run(). | `Dispatcher`, `RunState`, `worker_main`, `account_main`, `main_async`, `run` |
 
 ### `serp/` — Поиск по Threads (`search.py`)
@@ -158,7 +167,8 @@ uv run scripts/run.py --since 1m --comments    # все профили из data
 | Команда | Что делает |
 |---|---|
 | `add N` | N аккаунтов: окна открываются по очереди, вы входите, куки сохраняются |
-| `list` | аккаунты, ники, статусы и статистика: запуски, профили, посты, комментарии, 429, ошибки авторизации |
+| `list` | аккаунты, ники, статусы и статистика из БД: запуски, профили, посты, комментарии, 429, ошибки авторизации |
+| `proxy NAME [URL]` | прокси аккаунта (`--clear` сбрасывает; без URL показывает текущий) |
 | `relogin NAME` | войти заново, когда сессия истекла |
 | `check [NAME] [--headless]` | проверить, что сессии живы |
 | `export [NAME...]` | все куки одним zip в `data/export/` |

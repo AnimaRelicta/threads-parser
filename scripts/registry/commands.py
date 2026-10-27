@@ -1,4 +1,4 @@
-"""Команды accounts.py: add, relogin, check, import, export, list."""
+"""Команды accounts.py: add, relogin, check, import, export, list, proxy."""
 
 import json
 import zipfile
@@ -10,16 +10,17 @@ from playwright.async_api import async_playwright
 from browser.launch import account_proxy, launch_browser, new_context
 from browser.session import check_session, detect_username, load_cookies, session_user_id
 from config import Settings
+from db.pool import connection
+from db.stats import REPORTS, format_table, run_report
 from registry.cookies import DEFAULT_USER_AGENT, cookie_jar, normalize_cookie
 from registry.login import confirm, dup_question, login_into
 from registry.store import (
     find_duplicate,
     load_registry,
-    new_record,
     next_name,
-    now_iso,
-    save_registry,
+    register_login,
     sync_cookie_files,
+    update_account,
 )
 
 
@@ -28,7 +29,7 @@ async def cmd_add(st: Settings, count: int, prefix: str, assume_yes: bool) -> No
     ok = 0
     async with async_playwright() as p:
         for i in range(count):
-            name = next_name(st, load_registry(st), prefix)
+            name = next_name(st, await load_registry(st), prefix)
             print(f"\n=== Аккаунт {i + 1} из {count}: {name} ===", flush=True)
             if await login_into(p, st, name, assume_yes):
                 ok += 1
@@ -40,7 +41,7 @@ async def cmd_add(st: Settings, count: int, prefix: str, assume_yes: bool) -> No
 
 async def cmd_relogin(st: Settings, names: list[str]) -> None:
 
-    reg = load_registry(st)
+    reg = await load_registry(st)
     async with async_playwright() as p:
         for name in names:
             if name not in reg:
@@ -52,8 +53,8 @@ async def cmd_relogin(st: Settings, names: list[str]) -> None:
 
 async def cmd_check(st: Settings, names: list[str], headless: bool) -> None:
 
-    sync_cookie_files(st)
-    reg = load_registry(st)
+    await sync_cookie_files(st)
+    reg = await load_registry(st)
     names = names or list(reg)
     if not names:
         print("Реестр пуст: uv run scripts/accounts.py add 1")
@@ -65,9 +66,9 @@ async def cmd_check(st: Settings, names: list[str], headless: bool) -> None:
             if not data:
                 print(f"  {name}: нет файла кук")
                 if name in reg:
-                    reg[name]["status"] = "needs_login"
+                    await update_account(st, name, status="needs_login")
                 continue
-            browser = await launch_browser(p, headless, account_proxy(st, name))
+            browser = await launch_browser(p, headless, await account_proxy(st, name))
             nick = None
             try:
                 ctx = await new_context(browser, data)
@@ -87,16 +88,18 @@ async def cmd_check(st: Settings, names: list[str], headless: bool) -> None:
                 + (f" (@{nick})" if nick else "")
             )
             if name in reg:
+                fields: dict = {}
                 if nick:
-                    reg[name]["username"] = nick
+                    fields["username"] = nick
                 if alive and reg[name].get("status") == "needs_login":
-                    reg[name]["status"] = "active"
+                    fields["status"] = "active"
                 elif not alive:
-                    reg[name]["status"] = "needs_login"
-    save_registry(st, reg)
+                    fields["status"] = "needs_login"
+                if fields:
+                    await update_account(st, name, **fields)
 
 
-def import_blob(
+async def import_blob(
     st: Settings,
     raw: bytes,
     src: str,
@@ -125,7 +128,7 @@ def import_blob(
         or DEFAULT_USER_AGENT
     )
 
-    reg = load_registry(st)
+    reg = await load_registry(st)
     dup = find_duplicate(reg, user_id)
     if dup and not confirm(dup_question(f"с id {user_id} ({src})", dup), assume_yes):
         print(f"[!] {src}: отменено, текущая сессия не изменена")
@@ -143,12 +146,11 @@ def import_blob(
     )
     username = (meta or {}).get("username")
     if dup:
-        reg[dup].update(status="active", last_login_at=now_iso(), last_error=None)
+        await register_login(st, dup, None, None)
         print(f"[+] Сессия «{dup}» заменена на новую (id {user_id})")
     else:
-        reg[target] = new_record(target, username, user_id)
+        await register_login(st, target, username, user_id)
         print(f"[+] Аккаунт добавлен как «{target}» (id {user_id or '?'})")
-    save_registry(st, reg)
     return target
 
 
@@ -182,7 +184,7 @@ def collect_bundle(file: Path) -> tuple[list[tuple[str, bytes]], dict]:
     return items, registry
 
 
-def cmd_import(
+async def cmd_import(
     st: Settings, file: Path, name: str | None, assume_yes: bool, user_agent: str | None
 ) -> None:
     if not file.exists():
@@ -195,7 +197,7 @@ def cmd_import(
     done = []
     for stem, raw in items:
         # из архива/папки сохраняем имена файлов; одиночный файл получает свободное имя
-        target = import_blob(
+        target = await import_blob(
             st,
             raw,
             stem,
@@ -212,9 +214,9 @@ def cmd_import(
         print("    Проверить сессии: uv run scripts/accounts.py check")
 
 
-def cmd_export(st: Settings, names: list[str], out: Path | None) -> None:
-    sync_cookie_files(st)
-    reg = load_registry(st)
+async def cmd_export(st: Settings, names: list[str], out: Path | None) -> None:
+    await sync_cookie_files(st)
+    reg = await load_registry(st)
     names = [n for n in (names or list(reg)) if st.cookies_path(n).exists()]
     if not names:
         raise SystemExit("Нет аккаунтов с файлами кук. Сначала: uv run scripts/accounts.py add 3")
@@ -233,55 +235,27 @@ def cmd_export(st: Settings, names: list[str], out: Path | None) -> None:
     print(f"    На сервере: uv run scripts/accounts.py import {out.name}")
 
 
-def cmd_list(st: Settings) -> None:
-    sync_cookie_files(st)
-    reg = load_registry(st)
-    if not reg:
+async def cmd_list(st: Settings) -> None:
+    await sync_cookie_files(st)
+    report = REPORTS["accounts"]
+    async with connection(st) as conn:
+        cols, rows = await run_report(conn, report)
+    if not rows:
         print("Реестр пуст: uv run scripts/accounts.py add 1")
         return
-    cols = (
-        "name",
-        "user",
-        "status",
-        "runs",
-        "profiles",
-        "posts",
-        "comments",
-        "media",
-        "429",
-        "auth",
-        "last_run",
-        "error",
-    )
-    rows = []
-    for n, r in reg.items():
-        user = f"@{r['username']}" if r.get("username") else f"id:{r.get('user_id') or '?'}"
-        rows.append(
-            (
-                n,
-                user,
-                r.get("status", "?"),
-                (r.get("runs_total") if isinstance(r.get("runs"), list) else r.get("runs")) or 0,
-                r.get("profiles") or 0,
-                r.get("posts") or 0,
-                r.get("comments") or 0,
-                r.get("media_files") or 0,
-                r.get("errors_429") or 0,
-                r.get("errors_auth") or 0,
-                (r.get("last_run_at") or "-")[:16].replace("T", " "),
-                (r.get("last_error") or "")[:30],
-            )
-        )
-    widths = [max(len(str(x)) for x in col) for col in zip(cols, *rows)]
-    fmt = "  ".join(f"{{:<{w}}}" for w in widths)
-    print(fmt.format(*cols))
-    print(fmt.format(*("-" * w for w in widths)))
-    for row in rows:
-        print(fmt.format(*map(str, row)))
-    print(
-        f"\nВсего: {len(reg)}, активных: {sum(r.get('status') == 'active' for r in reg.values())}"
-    )
-    print(
-        "runs: запуски (детали в поле runs у аккаунта); media: скачанные файлы; profiles: уникальные обработанные профили; posts/comments: новые посты и "
-        "комментарии; 429 и auth: ответы 429 и проблемы авторизации"
-    )
+    print(format_table(cols, rows))
+    status_i = cols.index("status")
+    print(f"\nВсего: {len(rows)}, активных: {sum(r[status_i] == 'active' for r in rows)}")
+    print(report.note)
+
+
+async def cmd_proxy(st: Settings, name: str, url: str | None, clear: bool) -> None:
+    """Прокси аккаунта (колонка accounts.proxy); без url и --clear показывает текущий."""
+    reg = await load_registry(st)
+    if name not in reg:
+        raise SystemExit(f"Аккаунта «{name}» нет в реестре (accounts.py list)")
+    if not url and not clear:
+        print(f"{name}: {reg[name].get('proxy') or 'общий PROXY из .env (или без прокси)'}")
+        return
+    await update_account(st, name, proxy=None if clear else url.strip())
+    print(f"[+] {name}: прокси " + ("сброшен" if clear else "задан"))

@@ -91,27 +91,3 @@ def print_summary(results: list[dict], cutoff: datetime | None) -> None:
         if r["note"]:
             line += f" | {r['note']}"
         log(line)
-
-
-def run_totals(entries: list[dict], stats: dict) -> dict:
-    """Итоги запуска одного аккаунта: сумма по его профилям."""
-
-    def tot(block: str, key: str) -> int:
-        return sum((e.get(block) or {}).get(key, 0) or 0 for e in entries)
-
-    return {
-        "profiles": len(entries),
-        "profiles_ok": sum(1 for e in entries if e.get("status") in ("ok", "empty")),
-        "posts_new": tot("posts", "new"),
-        "posts_refreshed": tot("posts", "refreshed"),
-        "comments_new": tot("comments", "new"),
-        "media_new_files": tot("media", "new_files"),
-        "media_new_images": tot("media", "new_images"),
-        "media_new_videos": tot("media", "new_videos"),
-        "media_new_bytes": tot("media", "new_bytes"),
-        "media_failed": tot("media", "download_failed"),
-        "media_in_files": tot("media", "in_file"),
-        "pages_opened": sum(e.get("pages_opened", 0) or 0 for e in entries),
-        "errors_429": stats.get("e429", 0),
-        "errors_auth": stats.get("eauth", 0),
-    }

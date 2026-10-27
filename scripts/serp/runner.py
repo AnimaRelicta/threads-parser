@@ -7,9 +7,11 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-from browser.account import Account, mark_account
+from browser.account import Account
 from browser.net import Net
 from core.logs import log
+from db.pool import run_sync
+from db.runs import finalize_run, start_run
 from registry.store import pick_accounts
 from scrape.capture import make_handler
 from scrape.dispatch import Dispatcher
@@ -140,7 +142,8 @@ async def process_search_task(
     }
 
 
-async def run_search_async(st, args, tasks: list[SearchTask]) -> None:
+async def run_search_async(st, args, tasks: list[SearchTask], outcome: dict) -> None:
+    """outcome: сюда кладём аккаунты, touched и stats для записи запуска в БД (run_search)."""
 
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
@@ -169,7 +172,8 @@ async def run_search_async(st, args, tasks: list[SearchTask]) -> None:
 
     post_store = PostStore(out / "posts.jsonl")
 
-    accounts = pick_accounts(st, args.accounts)
+    accounts = await pick_accounts(st, args.accounts)
+    outcome["accounts"] = accounts
     n_accounts = len(accounts)
     m = max(1, int(getattr(args, "workers", 1) or 1))
 
@@ -179,8 +183,8 @@ async def run_search_async(st, args, tasks: list[SearchTask]) -> None:
     )
 
     disp = Dispatcher(pending)
-    touched: dict[str, dict] = {}
-    stats: dict[str, dict] = {}
+    touched: dict[str, dict] = outcome["touched"]  # аккаунт -> {"status", "error"}
+    stats: dict[str, dict] = outcome["stats"]  # аккаунт -> {"e429", "eauth"}
     jobs_lock = asyncio.Lock()
 
     def add_stat(account: str, **kw) -> None:
@@ -312,18 +316,6 @@ async def run_search_async(st, args, tasks: list[SearchTask]) -> None:
         if isinstance(o, Exception):
             log(f"[!] Аккаунт завершился с ошибкой: {type(o).__name__}: {str(o)[:200]}")
 
-    for acc_name in accounts:
-        msg = touched.get(acc_name)
-        acc_stats = stats.get(acc_name)
-        if msg or acc_stats:
-            mark_account(
-                st,
-                acc_name,
-                status=(msg or {}).get("status"),
-                error=(msg or {}).get("error"),
-                stats=acc_stats,
-            )
-
     if post_store.new:
         post_store.save()
 
@@ -337,7 +329,37 @@ async def run_search_async(st, args, tasks: list[SearchTask]) -> None:
 
 def run_search(st, args, tasks: list[SearchTask]) -> None:
     """Синхронная точка входа для обычного (не --recon) поиска."""
+    settings = {
+        "tasks": len(tasks),
+        "modes": list(getattr(args, "modes", []) or []),
+        "workers": args.workers,
+        "max_posts": args.max_posts,
+        "max_scrolls": args.max_scrolls,
+        "force": bool(args.force),
+        "headless": bool(args.headless),
+    }
+    run_id = run_sync(st, lambda conn: start_run(conn, "search", settings))
+    outcome: dict = {"accounts": [], "touched": {}, "stats": {}}
+    interrupted = False
     try:
-        asyncio.run(run_search_async(st, args, tasks))
+        asyncio.run(run_search_async(st, args, tasks, outcome))
     except KeyboardInterrupt:
+        interrupted = True
         print("\n[!] Остановлено пользователем: posts.jsonl и jobs.json сохранены.")
+    finally:
+        try:
+            run_sync(
+                st,
+                lambda conn: finalize_run(
+                    conn,
+                    run_id,
+                    outcome["accounts"],
+                    outcome["touched"],
+                    outcome["stats"],
+                    {},
+                    {},
+                    interrupted,
+                ),
+            )
+        except (Exception, SystemExit) as e:
+            log(f"[!] Итоги запуска не записаны в БД (запуск #{run_id}): {str(e)[:200]}")

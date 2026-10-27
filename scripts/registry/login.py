@@ -8,7 +8,7 @@ import time
 from browser.launch import account_proxy, launch_browser, new_context
 from browser.session import detect_username, has_session, save_cookies
 from config import TH, TH_URLS, Settings
-from registry.store import find_duplicate, load_registry, new_record, now_iso, save_registry
+from registry.store import find_duplicate, load_registry, register_login
 
 
 def confirm(question: str, assume_yes: bool = False) -> bool:
@@ -31,7 +31,7 @@ async def login_account(p, st: Settings, name: str) -> tuple[str | None, str | N
     """Открывает чистый браузер, ждёт ручного входа, сохраняет куки.
     Возвращает (id аккаунта, ник или None)."""
 
-    browser = await launch_browser(p, headless=False, proxy=account_proxy(st, name))
+    browser = await launch_browser(p, headless=False, proxy=await account_proxy(st, name))
     try:
         ctx = await new_context(browser)
         page = await ctx.new_page()
@@ -85,33 +85,17 @@ async def login_into(p, st: Settings, name: str, assume_yes: bool = False) -> bo
     except Exception as e:
         print(f"[!] Не удалось войти: {str(e)[:200]}")
         return False
-    reg = load_registry(st)
+    reg = await load_registry(st)
     dup = find_duplicate(reg, user_id)
     if dup and dup != name:
         if not confirm(dup_question(f"с id {user_id}", dup), assume_yes):
             print("[!] Отменено: текущая сессия не изменена")
             return False
         shutil.move(st.cookies_path(name), st.cookies_path(dup))
-        reg[dup].update(
-            status="active",
-            last_login_at=now_iso(),
-            last_error=None,
-            username=username or reg[dup].get("username"),
-        )
-        save_registry(st, reg)
+        await register_login(st, dup, username, None)
         print(f"[+] Сессия «{dup}» заменена на новую (id {user_id})")
         return True
-    if name in reg:
-        reg[name].update(
-            status="active",
-            last_login_at=now_iso(),
-            last_error=None,
-            user_id=user_id or reg[name].get("user_id"),
-            username=username or reg[name].get("username"),
-        )
-    else:
-        reg[name] = new_record(name, username, user_id)
-    save_registry(st, reg)
+    await register_login(st, name, username, user_id)
     who = f"@{username}, " if username else ""
     print(f"[+] Сохранён «{name}» ({who}id {user_id or '?'})")
     return True

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Управление аккаунтами Threads: вход, реестр, перенос кук на сервер.
 
-Реестр лежит в data/accounts.json, куки каждого аккаунта — в data/cookies/<имя>.json.
+Реестр лежит в Postgres (таблица accounts, нужен DATABASE_URL), куки каждого аккаунта —
+в файлах data/cookies/<имя>.json.
 Вход всегда выполняется в браузере с окном: вы входите вручную (капча, 2FA).
 
 Команды (из корня проекта):
     uv run scripts/accounts.py add 3            # завести 3 аккаунта (окна по очереди)
     uv run scripts/accounts.py list
+    uv run scripts/accounts.py proxy account_001 socks5://127.0.0.1:12334
     uv run scripts/accounts.py relogin account_002
     uv run scripts/accounts.py check [--headless]
     uv run scripts/accounts.py export           # куки одним zip для переноса на сервер
@@ -22,7 +24,15 @@ import asyncio
 from pathlib import Path
 
 from config import load_settings
-from registry.commands import cmd_add, cmd_check, cmd_export, cmd_import, cmd_list, cmd_relogin
+from registry.commands import (
+    cmd_add,
+    cmd_check,
+    cmd_export,
+    cmd_import,
+    cmd_list,
+    cmd_proxy,
+    cmd_relogin,
+)
 
 
 def main() -> None:
@@ -34,7 +44,12 @@ def main() -> None:
     a.add_argument("--prefix", default="account")
     a.add_argument("--yes", "-y", action="store_true")
 
-    sub.add_parser("list", help="показать аккаунты")
+    sub.add_parser("list", help="показать аккаунты и статистику из БД")
+
+    x = sub.add_parser("proxy", help="прокси аккаунта (без аргументов показывает текущий)")
+    x.add_argument("name")
+    x.add_argument("url", nargs="?", help="socks5://host:port или http://user:pass@host:port")
+    x.add_argument("--clear", action="store_true", help="сбросить: будет общий PROXY из .env")
 
     r = sub.add_parser("relogin", help="войти заново в существующие аккаунты")
     r.add_argument("names", nargs="+")
@@ -64,15 +79,17 @@ def main() -> None:
                 raise SystemExit("Количество должно быть больше нуля")
             asyncio.run(cmd_add(st, args.count, args.prefix, args.yes))
         elif args.cmd == "list":
-            cmd_list(st)
+            asyncio.run(cmd_list(st))
+        elif args.cmd == "proxy":
+            asyncio.run(cmd_proxy(st, args.name, args.url, args.clear))
         elif args.cmd == "relogin":
             asyncio.run(cmd_relogin(st, args.names))
         elif args.cmd == "check":
             asyncio.run(cmd_check(st, args.names, args.headless))
         elif args.cmd == "export":
-            cmd_export(st, args.names, args.out)
+            asyncio.run(cmd_export(st, args.names, args.out))
         elif args.cmd == "import":
-            cmd_import(st, args.file, args.name, args.yes, args.user_agent)
+            asyncio.run(cmd_import(st, args.file, args.name, args.yes, args.user_agent))
     except KeyboardInterrupt:
         print("\n[!] Остановлено пользователем.")
 

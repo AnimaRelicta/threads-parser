@@ -1,7 +1,7 @@
 """Запуск Chromium: прокси и контекст."""
 
 from config import Settings
-from registry.store import load_registry
+from registry.store import get_account
 
 
 def proxy_settings(proxy: str | None) -> dict | None:
@@ -21,9 +21,9 @@ def proxy_settings(proxy: str | None) -> dict | None:
     return out
 
 
-def account_proxy(st: Settings, name: str) -> str | None:
-    """Прокси аккаунта: поле proxy в реестре > общий PROXY > без прокси."""
-    rec = load_registry(st).get(name) or {}
+async def account_proxy(st: Settings, name: str) -> str | None:
+    """Прокси аккаунта: колонка proxy в таблице accounts > общий PROXY > без прокси."""
+    rec = await get_account(st, name) or {}
     return (rec.get("proxy") or "").strip() or st.proxy
 
 

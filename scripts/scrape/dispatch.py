@@ -11,7 +11,7 @@ from pathlib import Path
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
-from browser.account import Account, mark_account
+from browser.account import Account
 from browser.net import Net
 from browser.session import detect_username, session_user_id
 from config import Settings
@@ -19,11 +19,13 @@ from core.consts import USERNAME_RE
 from core.fsio import normalize_username, read_usernames
 from core.logs import PSTAT, TAG, log
 from core.timeutil import parse_since
-from registry.store import load_registry, now_iso, pick_accounts
+from db.pool import run_sync
+from db.runs import finalize_run, start_run
+from registry.store import get_account, now_iso, pick_accounts
 from scrape.capture import make_handler
 from scrape.consts import BLOCKED_RESOURCES, UNLIMITED_DEPTH
 from scrape.profile import run_profile
-from scrape.report import print_summary, profile_run_entry, run_totals
+from scrape.report import print_summary, profile_run_entry
 
 
 class Dispatcher:
@@ -59,13 +61,12 @@ class Dispatcher:
 
 @dataclass
 class RunState:
-    """Итоги запуска: результаты профилей и то, что надо записать в реестр аккаунтов."""
+    """Итоги запуска: результаты профилей и то, что надо записать в БД по аккаунтам."""
 
     got: dict = field(default_factory=dict)  # ник профиля -> результат
     touched: dict = field(default_factory=dict)  # аккаунт -> {"status", "error"}
-    stats: dict = field(default_factory=dict)  # аккаунт -> счётчики
+    stats: dict = field(default_factory=dict)  # аккаунт -> {"e429", "eauth"}
     nicks: dict = field(default_factory=dict)  # аккаунт -> найденный ник
-    profiles: dict = field(default_factory=dict)  # аккаунт -> {ники обработанных профилей}
     json_fail: int = 0
     entries: dict = field(default_factory=dict)  # аккаунт -> [запись о запуске профиля]
 
@@ -142,12 +143,8 @@ async def worker_main(
                         "newest": None,
                         "note": "ошибка браузера",
                     }
-                if res["status"] in ("ok", "empty"):
-                    state.profiles.setdefault(account, set()).add(res["username"])
                 state.add_stat(
                     account,
-                    posts=res.get("saved", 0),
-                    comments=res.get("new_comments", 0),
                     e429=1 if res.get("abort_kind") == "429" else 0,
                     eauth=1 if res.get("abort_kind") == "auth" else 0,
                 )
@@ -158,7 +155,6 @@ async def worker_main(
                     duration_sec=round(time.monotonic() - t0, 1),
                     pstat=ps,
                 )
-                state.add_stat(account, media_files=ps.get("files", 0))
                 state.entries.setdefault(account, []).append(profile_run_entry(res))
                 if res["status"] == "abort":
                     # проблема на уровне аккаунта: все его воркеры останавливаются,
@@ -217,7 +213,7 @@ async def account_main(
             return
 
         try:  # ник аккаунта: пока пуст в реестре, определяем по главной странице
-            if not load_registry(st).get(acc_name, {}).get("username"):
+            if not ((await get_account(st, acc_name)) or {}).get("username"):
                 nick = await detect_username(page0, await session_user_id(acc.ctx))
                 if nick:
                     log(f"[+] Ник аккаунта: @{nick}")
@@ -284,7 +280,7 @@ def run(args, st: Settings) -> None:
         raise SystemExit("--depth должен быть не меньше 1 (или -1 без ограничения)")
 
     args.cutoff = parse_since(args.since)
-    accounts = pick_accounts(st, args.accounts)
+    accounts = asyncio.run(pick_accounts(st, args.accounts))
     m = max(1, args.workers)
     log(
         f"[*] Профилей: {len(usernames)} | аккаунтов: {len(accounts)} | "
@@ -303,10 +299,10 @@ def run(args, st: Settings) -> None:
 
     Path(args.output).mkdir(parents=True, exist_ok=True)
     state = RunState()
-    run_started, run_t0 = now_iso(), time.monotonic()
     run_settings = {
         "profiles_requested": len(usernames),
         "workers": m,
+        "accounts": accounts,
         "since": args.since,
         "limit": args.limit,
         "comments": bool(args.comments),
@@ -316,36 +312,30 @@ def run(args, st: Settings) -> None:
         "with_videos": bool(args.with_videos),
         "headless": bool(args.headless),
     }
+    run_id = run_sync(st, lambda conn: start_run(conn, "profiles", run_settings))
+    interrupted = False
     try:
         asyncio.run(main_async(accounts, usernames, args, st, state, m))
     except KeyboardInterrupt:
+        interrupted = True
         log("\n[!] Остановлено пользователем: сохранённое не потеряно, браузеры закрыты.")
     finally:
-        run_finished = now_iso()
-        for acc in accounts:
-            msg = state.touched.get(acc, {})
-            entries = state.entries.get(acc, [])
-            run_rec = {
-                "run_id": run_started,
-                "started_at": run_started,
-                "finished_at": run_finished,
-                "duration_sec": round(time.monotonic() - run_t0, 1),
-                "status": ("error" if msg.get("error") else "ok"),
-                "error": msg.get("error"),
-                "settings": run_settings,
-                "totals": run_totals(entries, state.stats.get(acc) or {}),
-                "profiles": entries,
-            }
-            mark_account(
+        try:
+            run_sync(
                 st,
-                acc,
-                status=msg.get("status"),
-                error=msg.get("error"),
-                stats=state.stats.get(acc),
-                username=state.nicks.get(acc),
-                profiles=state.profiles.get(acc, set()),
-                run=run_rec,
+                lambda conn: finalize_run(
+                    conn,
+                    run_id,
+                    accounts,
+                    state.touched,
+                    state.stats,
+                    state.entries,
+                    state.nicks,
+                    interrupted,
+                ),
             )
+        except (Exception, SystemExit) as e:
+            log(f"[!] Итоги запуска не записаны в БД (запуск #{run_id}): {str(e)[:200]}")
 
     if state.json_fail:
         log(f"[!] Не удалось разобрать JSON в {state.json_fail} ответах сервера")

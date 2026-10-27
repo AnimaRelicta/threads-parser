@@ -36,7 +36,7 @@ async def run_recon(st, args, task: "SearchTask") -> None:
     """
     from datetime import datetime as _dt
 
-    accounts = pick_accounts(st, args.accounts)
+    accounts = await pick_accounts(st, args.accounts)
     acc_name = accounts[0]
     needle = args.needle or re.split(r"\s+", task.query.strip())[0:2]
     needle = " ".join(needle) if isinstance(needle, list) else needle
