@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Единая точка входа проекта: подкоманды parse, search, accounts.
+"""Единая точка входа проекта: подкоманды parse, search, accounts, db.
 
 Примеры (из корня проекта):
     uv run scripts/cli.py parse olx_vetka_astana --limit 5 --comments
     uv run scripts/cli.py search "олх ветка астана" --since 7d
     uv run scripts/cli.py accounts check --headless
+    uv run scripts/cli.py db migrate          # схема Postgres
     uv run scripts/cli.py parse --help        # справка подкоманды
 
 Подкоманда получает остаток командной строки без изменений, поэтому все флаги те же, что у
-`run.py`, `search.py` и `accounts.py`; эти файлы по-прежнему можно запускать напрямую.
+`run.py`, `search.py`, `accounts.py` и `dbadmin.py`; эти файлы по-прежнему можно запускать напрямую.
 """
 
 import importlib
@@ -18,6 +19,7 @@ COMMANDS = {
     "parse": ("run", "парсинг профилей: посты, медиа, комментарии (run.py)"),
     "search": ("search", "поиск по Threads: посты по запросам (search.py)"),
     "accounts": ("accounts", "аккаунты: add, list, relogin, check, export, import (accounts.py)"),
+    "db": ("dbadmin", "база Postgres: migrate, status (dbadmin.py)"),
 }
 
 

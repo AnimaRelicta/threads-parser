@@ -17,7 +17,8 @@ threads-parser/
 │   ├── run.py         # CLI: парсинг профилей
 │   ├── search.py      # CLI: поиск по выдаче Threads
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
-│   ├── core/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
+│   ├── dbadmin.py     # CLI: Postgres (migrate/status)
+│   ├── core/  db/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
 ├── data/              # профили, куки, реестр, результаты профильного парсера
 ├── output/search/     # результаты поиска (posts.jsonl, jobs.json)
 ├── docs/              # ТЗ на перенос в Postgres и рабочие заметки
@@ -31,18 +32,19 @@ threads-parser/
 uv run scripts/cli.py parse olx_vetka_astana --limit 5 --comments   # = run.py
 uv run scripts/cli.py search "олх ветка астана" --since 7d          # = search.py
 uv run scripts/cli.py accounts check --headless                     # = accounts.py
+uv run scripts/cli.py db migrate                                    # = dbadmin.py
 uv run scripts/cli.py parse --help                                  # справка подкоманды
 ```
 
 `cli.py` только выбирает подкоманду и передаёт ей остальные аргументы без изменений, поэтому
 флаги те же, что у `run.py`, `search.py`, `accounts.py`; эти файлы можно запускать и напрямую.
-Новая команда (например, `db migrate` для Postgres) добавляется одной строкой в `COMMANDS`.
+Новая команда добавляется одной строкой в `COMMANDS`.
 
 ### Правила зависимостей
 
 Импорты между модулями идут только «вниз», циклов нет:
 
-`core` ← `registry.store`, `registry.cookies` ← `browser` ← `registry.login`, `registry.commands` и `scrape` ← `serp` ← CLI (`run.py`, `search.py`, `accounts.py`).
+`core` ← `db` ← `registry.store`, `registry.cookies` ← `browser` ← `registry.login`, `registry.commands` и `scrape` ← `serp` ← CLI (`run.py`, `search.py`, `accounts.py`).
 
 - `core` не импортирует другие пакеты проекта (только `config`).
 - `serp` берёт из `scrape` и `browser` перехват ответов, прокрутку и воркеры; обратно — нет.
@@ -58,6 +60,18 @@ uv run scripts/cli.py parse --help                                  # справ
 | `logs.py` | Журнал воркеров: метка в строках лога и счётчики текущего профиля. | `TAG`, `PSTAT`, `pstat`, `log` |
 | `timeutil.py` | Время и даты: ISO-строки, разбор --since, сдвиг месяцев. | `iso`, `ts_from_iso`, `parse_dt`, `shift_months`, `parse_since` |
 | `fsio.py` | Чтение и запись файлов: JSON, JSONL, списки профилей. | `read_json`, `read_jsonl`, `write_jsonl_atomic`, `read_usernames`, `normalize_username` |
+
+### `db/` — Postgres (схема `threads`)
+
+| Модуль | Назначение | Основное содержимое |
+|---|---|---|
+| `pool.py` | Подключение: пул asyncpg, разовые запросы из синхронного кода. | `SCHEMA`, `require_url`, `create_pool`, `connect`, `run_sync` |
+| `migrate.py` | Миграции `db/migrations/*.sql` по порядку, учёт в `schema_migrations`. | `list_migrations`, `migrate`, `status` |
+| `migrations/001_init.sql` | Начальная схема (аккаунты, запуски, профили, посты, комментарии, медиа, поиск, темы). | |
+
+Подготовка: `DATABASE_URL` в `scripts/.env`, затем `uv run scripts/cli.py db migrate`;
+состояние: `uv run scripts/cli.py db status`. Остальной код пока пишет в JSON-файлы,
+перенос идёт поэтапно.
 
 ### `browser/` — Браузер и аккаунт-воркер
 
