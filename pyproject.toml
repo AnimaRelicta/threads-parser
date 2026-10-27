@@ -1,0 +1,13 @@
+[project]
+name = "threads-parser"
+version = "0.1.0"
+description = "Парсер Threads через Playwright: посты, медиа, комментарии деревом"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "asyncpg>=0.32.0",
+    "playwright>=1.40",
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,14 @@
+# Единый стандарт кода проекта: ruff check --fix . && ruff format .
+line-length = 100
+target-version = "py310"
+src = ["scripts"]
+
+[lint]
+select = ["E", "F", "I", "W", "UP"]
+ignore = ["E501"]
+
+[lint.isort]
+known-first-party = ["config", "core", "browser", "registry", "scrape", "serp"]
+
+[format]
+quote-style = "double"

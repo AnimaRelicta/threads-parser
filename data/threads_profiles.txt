@@ -1,0 +1,5 @@
+# Профили для парсинга: по одному на строку.
+# Можно писать ник, @ник или ссылку. Пустые строки и строки с # игнорируются.
+https://www.threads.com/@olx_vetka_astana
+https://www.threads.com/@auyz__tea
+https://www.threads.com/@vseobovsem030407

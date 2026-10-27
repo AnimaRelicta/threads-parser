@@ -1,0 +1,11 @@
+scripts/.env
+data/cookies/*.json
+data/output/*
+data/export/
+data/accounts.json
+!data/cookies/.gitkeep
+!data/output/.gitkeep
+__pycache__/
+.venv/
+
+output
