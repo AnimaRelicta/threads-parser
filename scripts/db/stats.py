@@ -54,7 +54,8 @@ register(
             ) ra ON ra.account = a.name
             LEFT JOIN (
                 SELECT account,
-                       count(DISTINCT profile_id) FILTER (WHERE status IN ('ok', 'empty')) AS profiles,
+                       count(DISTINCT profile_id)
+                           FILTER (WHERE status IN ('ok', 'empty')) AS profiles,
                        sum(posts_new) AS posts, sum(comments_new) AS comments,
                        sum(media_new_files) AS media_files
                 FROM profile_runs GROUP BY account

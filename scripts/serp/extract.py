@@ -8,7 +8,7 @@ from browser.session import USER_ID_KEYS
 from config import TH
 from core.jsonwalk import walk
 from core.timeutil import iso
-from scrape.extract import caption_of
+from scrape.extract import caption_of, topic_of
 
 
 async def read_all_embedded(page) -> list:
@@ -95,26 +95,6 @@ def doc_is_useful(doc) -> bool:
 def caption_text(d: dict) -> str | None:
     c = caption_of(d)
     return c if c is None or len(c) <= 80 else c[:80] + "…"
-
-
-# Тема поста берётся из отдельного поля JSON (text_post_app_info.tag_header),
-# подтверждено на живой выдаче. Нужна фильтру approved/rejected. Есть не у всех постов.
-TOPIC_CANDIDATE_KEYS = ("tag_cluster_name", "display_name", "name")
-
-
-def topic_of(post: dict) -> str | None:
-    """Тема поста из tag_header; None, если тега нет."""
-    tpai = post.get("text_post_app_info")
-    if not isinstance(tpai, dict):
-        return None
-    tag = tpai.get("tag_header")
-    if not isinstance(tag, dict):
-        return None
-    for k in TOPIC_CANDIDATE_KEYS:
-        v = tag.get(k)
-        if isinstance(v, str) and v.strip():
-            return v.strip()
-    return None
 
 
 def extract_post(d: dict, query: str, mode: str) -> dict | None:

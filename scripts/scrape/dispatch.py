@@ -19,7 +19,8 @@ from core.consts import USERNAME_RE
 from core.fsio import normalize_username, read_usernames
 from core.logs import PSTAT, TAG, log
 from core.timeutil import parse_since
-from db.pool import run_sync
+from db.pool import DB_ERRORS, create_pool, run_sync
+from db.profiles import ProfileStore
 from db.runs import finalize_run, start_run
 from registry.store import get_account, now_iso, pick_accounts
 from scrape.capture import make_handler
@@ -67,6 +68,7 @@ class RunState:
     touched: dict = field(default_factory=dict)  # аккаунт -> {"status", "error"}
     stats: dict = field(default_factory=dict)  # аккаунт -> {"e429", "eauth"}
     nicks: dict = field(default_factory=dict)  # аккаунт -> найденный ник
+    store: ProfileStore | None = None  # хранилище профилей (создаётся в main_async)
     json_fail: int = 0
     entries: dict = field(default_factory=dict)  # аккаунт -> [запись о запуске профиля]
 
@@ -131,9 +133,10 @@ async def worker_main(
                 PSTAT.set(ps)
                 t0, started = time.monotonic(), now_iso()
                 try:
-                    res = await run_profile(acc, grid_page, post_page, net, name, args)
-                except PlaywrightError as e:
-                    log(f"[!] Ошибка браузера: {str(e)[:200]}")
+                    res = await run_profile(acc, grid_page, post_page, net, name, args, state.store)
+                except (PlaywrightError, *DB_ERRORS) as e:
+                    is_db = not isinstance(e, PlaywrightError)
+                    log(f"[!] Ошибка {'БД' if is_db else 'браузера'}: {str(e)[:200]}")
                     res = {
                         "username": name,
                         "status": "error",
@@ -141,7 +144,7 @@ async def worker_main(
                         "new_comments": 0,
                         "fresh_posts": 0,
                         "newest": None,
-                        "note": "ошибка браузера",
+                        "note": "ошибка БД" if is_db else "ошибка браузера",
                     }
                 state.add_stat(
                     account,
@@ -248,14 +251,20 @@ async def main_async(
     accounts: list[str], usernames: list[str], args, st: Settings, state: RunState, m: int
 ) -> None:
     disp = Dispatcher(usernames)
-    async with async_playwright() as p:
-        outcomes = await asyncio.gather(
-            *(
-                account_main(p, acc, ai, args, st, disp, state, len(accounts), m)
-                for ai, acc in enumerate(accounts)
-            ),
-            return_exceptions=True,
-        )
+    # Пул на весь запуск: воркеры берут соединения на время одной записи
+    pool = await create_pool(st, max_size=max(5, len(accounts) * m + 2))
+    state.store = ProfileStore(pool, Path(args.output))
+    try:
+        async with async_playwright() as p:
+            outcomes = await asyncio.gather(
+                *(
+                    account_main(p, acc, ai, args, st, disp, state, len(accounts), m)
+                    for ai, acc in enumerate(accounts)
+                ),
+                return_exceptions=True,
+            )
+    finally:
+        await pool.close()
     for o in outcomes:
         if isinstance(o, Exception):
             log(f"[!] Аккаунт завершился с ошибкой: {type(o).__name__}: {str(o)[:200]}")

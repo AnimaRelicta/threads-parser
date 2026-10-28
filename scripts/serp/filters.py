@@ -1,48 +1,14 @@
 """Фильтр «олх» по тексту постов."""
 
-import re
 from pathlib import Path
 
 from core.fsio import read_jsonl, write_jsonl_atomic
-
-# ---------------------------------------------------------------------------
-# Базовая фильтрация: разложить собранные посты на approved и rejected.
-# Критерий: в тексте поста или его теме/заголовке есть olx / олх.
-# ---------------------------------------------------------------------------
-
-# Приводим похожие символы смешанной раскладки к кириллице, чтобы
-# «оЛХ», «oLx», «OLX», «оlx» распознавались одинаково.
-# Цифру 1 не трогаем: вариант «ол1х» обрабатывается отдельным ключевым словом.
-FILTER_TRANS = str.maketrans(
-    {
-        "o": "о",
-        "O": "о",
-        "l": "л",
-        "L": "л",
-        "x": "х",
-        "X": "х",
-    }
-)
-
-
-# Ищем именно целые слова (границы \b), чтобы «полха» и т.п. не считались совпадением.
-FILTER_RE = re.compile(r"\b(?:олх|ол1х)\b")
-
-
-def normalize_text(s: str) -> str:
-    """Нижний регистр + унификация похожих символов латиницы/кириллицы."""
-    return s.lower().translate(FILTER_TRANS)
+from core.textfilter import classify
 
 
 def post_matches_filter(post: dict) -> bool:
-    """Есть ли в тексте поста или его теме/заголовке ключевые слова.
-
-    Поле запроса (query) намеренно не проверяется: иначе все посты по
-    запросу «олх…» автоматически попадали бы в approved, даже если сам
-    пост не про олх.
-    """
-    blob = normalize_text((post.get("text") or "") + "\n" + (post.get("topic") or ""))
-    return bool(FILTER_RE.search(blob))
+    """Есть ли в тексте поста или его теме/заголовке ключевые слова."""
+    return classify(post.get("text"), post.get("topic"))[0] == "approved"
 
 
 def filter_posts_file(input_path: Path, approved_path: Path, rejected_path: Path) -> dict:

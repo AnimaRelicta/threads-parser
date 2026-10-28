@@ -11,6 +11,8 @@ import asyncpg
 from config import Settings
 
 SCHEMA = "threads"
+# ошибки БД, которые воркер парсера превращает в статус профиля, а не в падение
+DB_ERRORS = (asyncpg.PostgresError, asyncpg.InterfaceError, ConnectionError)
 T = TypeVar("T")
 
 

@@ -14,7 +14,7 @@ from core.errors import OldPost, SkipPost, ThreadAborted
 from core.logs import log
 from core.timeutil import iso, parse_dt
 from scrape.comments import collect_thread, finalize_comments, root_node_from
-from scrape.extract import caption_of, is_video_obj, media_urls
+from scrape.extract import caption_of, is_video_obj, media_urls, topic_of
 from scrape.media import download
 from scrape.page import load_root
 
@@ -51,19 +51,6 @@ def comment_lines(shortcode: str, comments: list[dict]) -> list[str]:
                 emitted.add(c["id"])
                 lines.append(f"    ↳ @{c.get('author')}: {(c.get('text') or '(без текста)')[:200]}")
     return lines
-
-
-LEGACY_POST_KEYS = {"shortcode": "code", "caption": "text", "comments_count": "reply_count"}
-
-
-def normalize_post(p: dict) -> dict:
-    """Старые posts.json хранили shortcode/caption/comments_count; приводим к
-    единым с поиском именам code/text/reply_count (п. 2.3 ТЗ)."""
-    for old, new in LEGACY_POST_KEYS.items():
-        if old in p:
-            val = p.pop(old)
-            p.setdefault(new, val)
-    return p
 
 
 def write_captions(path: Path, posts: list[dict]) -> None:
@@ -141,6 +128,7 @@ async def scrape_post(
         "url": f"{TH}/@{username}/post/{shortcode}",
         "date_utc": iso(ts),
         "text": caption,
+        "topic": topic_of(media),
         "hashtags": re.findall(r"#\w+", caption or ""),
         "mentions": re.findall(r"@[\w.]+", caption or ""),
         "likes": media.get("like_count"),

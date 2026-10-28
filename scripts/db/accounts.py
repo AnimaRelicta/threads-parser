@@ -6,7 +6,10 @@ import asyncpg
 
 from core.timeutil import parse_dt
 
-COLS = "name, username, user_id, cookies_file, status, proxy, created_at, last_login_at, last_run_at, last_error"
+COLS = (
+    "name, username, user_id, cookies_file, status, proxy, "
+    "created_at, last_login_at, last_run_at, last_error"
+)
 STATUSES = ("active", "needs_login", "disabled")
 # поля, которые разрешено менять через update_account (имена колонок идут в SQL)
 EDITABLE = {"username", "user_id", "status", "proxy", "last_error", "last_login_at", "last_run_at"}

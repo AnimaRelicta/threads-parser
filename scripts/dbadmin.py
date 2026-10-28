@@ -5,6 +5,7 @@
     uv run scripts/dbadmin.py migrate     # создать схему threads и применить миграции
     uv run scripts/dbadmin.py status      # применённые миграции и число строк в таблицах
     uv run scripts/dbadmin.py import-accounts   # перенести аккаунты из data/accounts.json
+    uv run scripts/dbadmin.py import-profiles   # перенести posts.json, anchor.json и др. профилей
     uv run scripts/cli.py db migrate      # то же через единую точку входа
 
 Строка подключения берётся из DATABASE_URL в scripts/.env.
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from config import load_settings
 from db.accounts import import_legacy
+from db.legacy import import_profiles
 from db.migrate import migrate, status
 from db.pool import run_sync
 
@@ -58,6 +60,24 @@ def cmd_import_accounts(st, file: Path | None) -> None:
     print(f"[+] Аккаунтов добавлено: {added}, уже были в БД: {skipped}")
 
 
+def cmd_import_profiles(st, root: Path | None, only: list[str] | None) -> None:
+    """Разовый перенос профилей из data/output/<ник>/: посты, комментарии, медиа, якорь."""
+    root = root or st.output_dir
+    if not root.is_dir():
+        raise SystemExit(f"Папка не найдена: {root}")
+    res = run_sync(st, lambda conn: import_profiles(conn, root, only))
+    if not res:
+        print("[*] Папок профилей с posts.json не найдено")
+        return
+    for name, c in res.items():
+        print(
+            f"  @{name}: постов {c['posts']} (уже в БД {c['kept']}), комментариев {c['comments']}, "
+            f"пропущенных {c['skipped']}, якорь {'да' if c['anchor'] else 'нет'}"
+        )
+    total = sum(c["posts"] for c in res.values())
+    print(f"[+] Профилей обработано: {len(res)}, постов перенесено: {total}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Postgres: миграции и состояние")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -65,10 +85,15 @@ def main() -> None:
     sub.add_parser("status", help="показать применённые миграции и размеры таблиц")
     imp = sub.add_parser("import-accounts", help="перенести аккаунты из accounts.json в БД")
     imp.add_argument("--file", type=Path, help="по умолчанию ACCOUNTS_FILE из .env")
+    ip = sub.add_parser("import-profiles", help="перенести данные профилей из data/output в БД")
+    ip.add_argument("--dir", type=Path, help="по умолчанию OUTPUT_DIR из .env")
+    ip.add_argument("profiles", nargs="*", help="только эти профили (по умолчанию все)")
     args = ap.parse_args()
     st = load_settings()
     try:
-        if args.cmd == "import-accounts":
+        if args.cmd == "import-profiles":
+            cmd_import_profiles(st, args.dir, args.profiles or None)
+        elif args.cmd == "import-accounts":
             cmd_import_accounts(st, args.file)
         else:
             {"migrate": cmd_migrate, "status": cmd_status}[args.cmd](st)

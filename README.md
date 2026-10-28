@@ -59,27 +59,35 @@ uv run scripts/cli.py parse --help                                  # справ
 | `errors.py` | Исключения парсера. | `RateLimited`, `AuthProblem`, `SkipPost`, `OldPost`, `ThreadAborted`, `HttpStatusError` |
 | `logs.py` | Журнал воркеров: метка в строках лога и счётчики текущего профиля. | `TAG`, `PSTAT`, `pstat`, `log` |
 | `timeutil.py` | Время и даты: ISO-строки, разбор --since, сдвиг месяцев. | `iso`, `ts_from_iso`, `parse_dt`, `shift_months`, `parse_since` |
+| `textfilter.py` | Фильтр «олх»: версия правил и классификация поста (approved/rejected, что и где сработало). | `FILTER_VERSION`, `FILTER_RE`, `normalize_text`, `classify` |
 | `fsio.py` | Чтение и запись файлов: JSON, JSONL, списки профилей. | `read_json`, `read_jsonl`, `write_jsonl_atomic`, `read_usernames`, `normalize_username` |
 
 ### `db/` — Postgres (схема `threads`)
 
 | Модуль | Назначение | Основное содержимое |
 |---|---|---|
-| `pool.py` | Подключение: пул asyncpg, разовые запросы из синхронного кода. | `SCHEMA`, `require_url`, `create_pool`, `connect`, `run_sync` |
+| `pool.py` | Подключение: пул asyncpg, разовые запросы из синхронного кода. | `SCHEMA`, `DB_ERRORS`, `require_url`, `create_pool`, `connect`, `connection`, `run_sync` |
 | `migrate.py` | Миграции `db/migrations/*.sql` по порядку, учёт в `schema_migrations`. | `list_migrations`, `migrate`, `status` |
 | `accounts.py` | Таблица `accounts`: чтение, вход, обновление, итог запуска, импорт старого реестра. | `fetch_accounts`, `register_login`, `update_account`, `mark_run`, `import_legacy` |
+| `posts.py` | Посты, комментарии, медиа, якоря и пропущенные посты профиля: запись и чтение в прежнем формате словарей. | `save_post`, `load_profile_posts`, `mark_skipped`, `save_anchor`, `save_meta`, `upsert_topic` |
+| `profiles.py` | Хранилище профильного пайплайна поверх пула: общий для воркеров запуска. | `ProfileStore`, `ProfileState` |
+| `legacy.py` | Разовый перенос старых файлов профилей (posts.json и др.). | `normalize_post`, `import_profiles` |
 | `runs.py` | Запуски: `runs`, `run_accounts`, `profile_runs`. | `start_run`, `finalize_run`, `save_profile_runs`, `ensure_profile` |
 | `stats.py` | Реестр отчётов (SQL + заголовок) и вывод таблицей. | `Report`, `REPORTS`, `run_report`, `format_table` |
 | `migrations/001_init.sql` | Начальная схема (аккаунты, запуски, профили, посты, комментарии, медиа, поиск, темы). | |
 
 Подготовка: `DATABASE_URL` в `scripts/.env`, затем `uv run scripts/cli.py db migrate`;
 состояние: `uv run scripts/cli.py db status`. Перенос идёт поэтапно: в БД уже живут
-реестр аккаунтов и записи запусков (`runs`, `run_accounts`, `profile_runs`); посты,
-комментарии, якоря и задачи поиска пока пишутся в JSON-файлы.
+реестр аккаунтов, записи запусков (`runs`, `run_accounts`, `profile_runs`) и весь профильный
+пайплайн (`profiles`, `posts`, `comments`, `media`, `profile_anchors`, `skipped_posts`); задачи
+и посты поиска пока пишутся в JSON-файлы. Файлы в `data/output/<ник>/` теперь только
+`media/`, `captions.txt` и итоговый `summary.json`.
 
 Аккаунты из старого `data/accounts.json` переносятся один раз:
 `uv run scripts/dbadmin.py import-accounts` (только записи аккаунтов; счётчики и `runs[]`
-старого файла не переносятся). Прокси аккаунта: `uv run scripts/accounts.py proxy NAME URL`.
+старого файла не переносятся). Данные профилей из `data/output/<ник>/`: `uv run scripts/dbadmin.py
+import-profiles [ник ...]` (посты, комментарии, пропущенные, якорь; уже имеющиеся в БД не перезаписываются).
+Прокси аккаунта: `uv run scripts/accounts.py proxy NAME URL`.
 Новый отчёт для `accounts.py list` и других команд добавляется записью в `db/stats.py`.
 
 ### `browser/` — Браузер и аккаунт-воркер
@@ -105,7 +113,7 @@ uv run scripts/cli.py parse --help                                  # справ
 | Модуль | Назначение | Основное содержимое |
 |---|---|---|
 | `consts.py` | Константы обхода профилей и комментариев. | `OLD_STREAK_STOP`, `PINNED_LOOKAHEAD`, `UNLIMITED_DEPTH`, `SORT_QS`, `NODE_DELAY`, `STALL_LIMIT` … |
-| `extract.py` | Разбор JSON-документов Threads: обход, медиа, текст поста. | `media_urls`, `caption_of`, `is_video_obj`, `read_embedded` |
+| `extract.py` | Разбор JSON-документов Threads: обход, медиа, текст поста. | `media_urls`, `caption_of`, `topic_of`, `is_video_obj`, `read_embedded` |
 | `harvest.py` | Накопление постов из ответов сервера: пул, индекс ленты, выбор дочерних узлов. | `Harvester`, `FeedIndex`, `pick_children` |
 | `page.py` | Работа со страницей: ожидание сети, прокрутка, «ещё», открытие поста. | `settle`, `CLICK_MORE_JS`, `SCROLL_JS`, `scroll_down`, `page_infos`, `click_more` … |
 | `capture.py` | Перехват JSON-ответов Threads вкладкой. | `make_handler` |
@@ -113,8 +121,8 @@ uv run scripts/cli.py parse --help                                  # справ
 | `media.py` | Скачивание медиа через сессию аккаунта. | `fetch_bytes`, `download`, `save_comment_media` |
 | `comments.py` | Сбор комментариев деревом. | `make_comment`, `root_node_from`, `node_from_comment`, `collect_thread`, `finalize_comments` |
 | `feed.py` | Лента профиля: ссылки на посты с заглядыванием вперёд. | `Lookahead`, `iter_post_links` |
-| `posts.py` | Сбор и обновление одного поста; читаемый captions.txt. | `comment_lines`, `LEGACY_POST_KEYS`, `normalize_post`, `write_captions`, `scrape_post`, `refresh_comments` … |
-| `anchor.py` | anchor.json: метка самого нового поста для режима «только новое». | `ANCHOR_NAME`, `DEFAULT_STOP_AFTER`, `read_anchor`, `anchor_covers`, `write_anchor`, `save_anchor` |
+| `posts.py` | Сбор и обновление одного поста; читаемый captions.txt. | `comment_lines`, `write_captions`, `scrape_post`, `refresh_comments` … |
+| `anchor.py` | Якорь профиля (хранится в `profile_anchors`): метка самого нового поста для режима «только новое». | `DEFAULT_STOP_AFTER`, `anchor_covers`, `compute_anchor` |
 | `profile.py` | Обработка одного профиля. | `run_profile` |
 | `report.py` | Итоги запуска: счётчики, записи журнала, сводка. | `media_totals`, `profile_run_entry`, `print_summary` |
 | `dispatch.py` | Очередь профилей и воркеры n x m; точка запуска run(). | `Dispatcher`, `RunState`, `worker_main`, `account_main`, `main_async`, `run` |
@@ -126,7 +134,7 @@ uv run scripts/cli.py parse --help                                  # справ
 | `tasks.py` | Задачи поиска: режимы, URL выдачи, окна дат, список запросов. | `MODES`, `DATE_FMT`, `parse_date`, `build_search_url`, `SearchTask`, `split_windows` … |
 | `extract.py` | Извлечение постов и тем из ответов поиска. | `read_all_embedded`, `find_paths`, `NOISY_KEYS`, `harvest_post_pool`, `doc_is_useful`, `caption_text` … |
 | `recon.py` | Разведка структуры выдачи (--recon). | `run_recon` |
-| `filters.py` | Фильтр «олх» по тексту постов. | `FILTER_TRANS`, `FILTER_RE`, `normalize_text`, `post_matches_filter`, `filter_posts_file` |
+| `filters.py` | Фильтр «олх» для posts.jsonl (правила в `core/textfilter.py`). | `post_matches_filter`, `filter_posts_file` |
 | `store.py` | Хранилище результатов поиска: posts.jsonl и jobs.json. | `PostStore`, `job_key`, `load_jobs`, `save_jobs`, `is_job_done`, `mark_job_done` … |
 | `runner.py` | Выполнение задач поиска воркерами. | `process_search_task`, `run_search_async`, `run_search` |
 
@@ -136,12 +144,12 @@ uv run scripts/cli.py parse --help                                  # справ
   `ruff check --fix scripts && ruff format scripts`.
 - Каждый модуль начинается с докстринга в одну строку; публичные функции — с типами.
 - Имена полей поста одинаковы в обоих пайплайнах: `code`, `text`, `reply_count`
-  (старые `posts.json` с `shortcode/caption/comments_count` читаются через `normalize_post`).
+  (старые `posts.json` с `shortcode/caption/comments_count` приводятся к ним при импорте, `db/legacy.py`).
 - Состояние воркера передаётся объектами (`Net`, `Account`, `Settings`), глобальных
   изменяемых переменных нет; метка лога и счётчики профиля живут в `contextvars` (`core/logs.py`).
-- Новый слой хранения (Postgres, см. `docs/TZ_threads_parser_postgres.md`) — отдельный
-  пакет `db/` рядом с остальными; он вызывается из `scrape/posts.py`, `scrape/profile.py`
-  и `serp/store.py` вместо записи в JSON, остальной код не меняется.
+- Слой хранения (Postgres, см. `docs/TZ_threads_parser_postgres.md`) — пакет `db/`; профильный
+  пайплайн получает `ProfileStore` и работает с теми же словарями постов, что раньше были в
+  posts.json, поэтому логика обхода и комментариев не менялась. Поиск (`serp/store.py`) пока пишет в JSON.
 
 ## Установка
 
@@ -255,7 +263,7 @@ uv run scripts/run.py --accounts account_001,account_002 --workers 2 --since 1m 
 ### Якорь и режим «только новое»
 
 После первого успешного прохода по окну (`--limit` или `--since`, либо по всему профилю)
-в `data/output/<ник>/anchor.json` пишется якорь. Дальше обход каждого профиля
+в таблицу `profile_anchors` пишется якорь. Дальше обход каждого профиля
 останавливается, когда подряд встретилось `--stop-after` известных постов
 (`STOP_AFTER_KNOWN`, по умолчанию 5). Закреплённые посты в серию не входят.
 
@@ -265,7 +273,7 @@ uv run scripts/run.py --accounts account_001,account_002 --workers 2 --since 1m 
 - Якорь работает, только если окно не шире покрытого: после `--since 1m` запуск с
   `--since 1y` пройдёт профиль полностью и обновит якорь. Проход по якорю окно не расширяет.
 - Якорь не пишется, если проход прервался (429, авторизация, ошибки). Если из
-  `posts.json` пропал пост, на который ссылается якорь, делается полный проход.
+  БД пропал пост, на который ссылается якорь, делается полный проход.
 - `--full` игнорирует якорь и проходит всё окно. Он нужен, чтобы дочитать ответы под
   старыми постами за пределами серии, а `--full-rescan` про другое: перечитывает ответы
   уже известных комментариев.

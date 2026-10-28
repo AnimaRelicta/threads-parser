@@ -31,6 +31,26 @@ def caption_of(m: dict) -> str | None:
     return None
 
 
+# Тема поста берётся из отдельного поля JSON (text_post_app_info.tag_header),
+# подтверждено на живой выдаче. Нужна фильтру approved/rejected. Есть не у всех постов.
+TOPIC_CANDIDATE_KEYS = ("tag_cluster_name", "display_name", "name")
+
+
+def topic_of(post: dict) -> str | None:
+    """Тема поста из tag_header; None, если тега нет."""
+    tpai = post.get("text_post_app_info")
+    if not isinstance(tpai, dict):
+        return None
+    tag = tpai.get("tag_header")
+    if not isinstance(tag, dict):
+        return None
+    for k in TOPIC_CANDIDATE_KEYS:
+        v = tag.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
 def is_video_obj(d: dict) -> bool:
     items = media_urls(d)
     return bool(d.get("media_type") == 2 or (items and all(k == "video" for k, _ in items)))

@@ -1,7 +1,6 @@
 """Обработка одного профиля."""
 
 import asyncio
-import json
 import random
 from datetime import datetime
 from pathlib import Path
@@ -12,17 +11,16 @@ from browser.account import Account
 from browser.net import Net
 from config import TH
 from core.errors import AuthProblem, OldPost, RateLimited, SkipPost, ThreadAborted
-from core.fsio import read_json
 from core.logs import log
 from core.timeutil import iso, parse_dt
-from scrape.anchor import ANCHOR_NAME, DEFAULT_STOP_AFTER, anchor_covers, read_anchor, save_anchor
+from db.profiles import ProfileStore
+from scrape.anchor import DEFAULT_STOP_AFTER, anchor_covers, compute_anchor
 from scrape.consts import OLD_STREAK_STOP, PINNED_LOOKAHEAD
 from scrape.extract import read_embedded
 from scrape.feed import Lookahead, iter_post_links
 from scrape.harvest import FeedIndex
 from scrape.posts import (
     needs_refresh,
-    normalize_post,
     refresh_comments,
     scrape_post,
     write_captions,
@@ -30,8 +28,12 @@ from scrape.posts import (
 from scrape.report import media_totals
 
 
-async def run_profile(acc: Account, grid_page, post_page, net: Net, username: str, args) -> dict:
-    """Обрабатывает один профиль. Возвращает словарь с итогами."""
+async def run_profile(
+    acc: Account, grid_page, post_page, net: Net, username: str, args, store: ProfileStore
+) -> dict:
+    """Обрабатывает один профиль. Возвращает словарь с итогами.
+
+    Состояние (посты, пропущенные, якорь) читается из Postgres и пишется туда же по мере работы."""
     cutoff = args.cutoff
     result = {
         "username": username,
@@ -49,10 +51,10 @@ async def run_profile(acc: Account, grid_page, post_page, net: Net, username: st
     out_dir = Path(args.output) / username
     media_dir = out_dir / "media"
     media_dir.mkdir(parents=True, exist_ok=True)
-    posts_path = out_dir / "posts.json"
-    skipped_path = out_dir / "skipped.json"
 
-    posts: list[dict] = [normalize_post(p) for p in read_json(posts_path, [])]
+    state = await store.load(username)
+    pid = state.profile_id
+    posts: list[dict] = state.posts
     # Посты, у которых были медиа, но ни один файл не скачался, берём заново
     broken = [p["code"] for p in posts if p.get("media_failed", 0) > 0 and not p.get("media")]
     if broken:
@@ -60,16 +62,7 @@ async def run_profile(acc: Account, grid_page, post_page, net: Net, username: st
         posts = [p for p in posts if p["code"] not in broken]
     by_code = {p["code"]: p for p in posts}
 
-    skipped = read_json(skipped_path, {})
-    if isinstance(skipped, list):
-        skipped = {c: {"reason": "video", "date": None} for c in skipped}
-
-    def save_skipped() -> None:
-        skipped_path.write_text(json.dumps(skipped, ensure_ascii=False, indent=1), encoding="utf-8")
-
-    def save_posts() -> None:
-        posts_path.write_text(json.dumps(posts, ensure_ascii=False, indent=2), encoding="utf-8")
-        write_captions(out_dir / "captions.txt", posts)
+    skipped = state.skipped
 
     net.grid_captured.clear()
     resp = await grid_page.goto(f"{TH}/@{username}", wait_until="domcontentloaded")
@@ -97,15 +90,12 @@ async def run_profile(acc: Account, grid_page, post_page, net: Net, username: st
         og_image: document.querySelector('meta[property="og:image"]')?.content || null
     })""")
     meta.update({"username": username, "url": f"{TH}/@{username}"})
-    (out_dir / "profile.json").write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    await store.save_meta(pid, meta)
     log(f"[+] {meta.get('og_title') or meta.get('title')}")
 
-    # Якорь: после первого прохода по окну лежит anchor.json; дальше обход
+    # Якорь: после первого прохода по окну лежит в profile_anchors; дальше обход
     # останавливается после N подряд известных постов (--full его игнорирует)
-    anchor_path = out_dir / ANCHOR_NAME
-    anchor = None if getattr(args, "full", False) else read_anchor(anchor_path)
+    anchor = None if getattr(args, "full", False) else state.anchor
     stop_after = 0
     if anchor is not None:
         known_codes = set(by_code) | set(skipped)
@@ -138,10 +128,10 @@ async def run_profile(acc: Account, grid_page, post_page, net: Net, username: st
         old_streak += 1
         return old_streak >= OLD_STREAK_STOP
 
-    def mark_skipped(shortcode: str, reason: str, date_str: str | None) -> None:
+    async def mark_skipped(shortcode: str, reason: str, date_str: str | None) -> None:
         skipped[shortcode] = {"reason": reason, "date": date_str}
         cnt["skipped_old" if reason == "old" else "skipped_video"] += 1
-        save_skipped()
+        await store.mark_skipped(pid, shortcode, reason, date_str)
         d = parse_dt(date_str)
         if d is not None:
             all_dates.append(d)
@@ -245,7 +235,7 @@ async def run_profile(acc: Account, grid_page, post_page, net: Net, username: st
                         f"[{processed + 1}] {shortcode}: старше периода "
                         f"({iso(ts)[:10]}), без открытия"
                     )
-                    mark_skipped(shortcode, "old", iso(ts))
+                    await mark_skipped(shortcode, "old", iso(ts))
                     if register_old():
                         log("[*] Дальше только старые посты, останавливаюсь")
                         stop_reason = "old"
@@ -253,7 +243,7 @@ async def run_profile(acc: Account, grid_page, post_page, net: Net, username: st
                     continue
                 if not args.with_videos and finfo.get("video"):
                     log(f"[{processed + 1}] {shortcode}: видео, без открытия")
-                    mark_skipped(shortcode, "video", iso(ts))
+                    await mark_skipped(shortcode, "video", iso(ts))
                     old_streak = 0
                     known_streak = 0
                     continue
@@ -279,7 +269,7 @@ async def run_profile(acc: Account, grid_page, post_page, net: Net, username: st
         except OldPost as e:
             date_str = e.args[0] if e.args else None
             log(f"    старше периода ({(date_str or '?')[:10]})")
-            mark_skipped(shortcode, "old", date_str)
+            await mark_skipped(shortcode, "old", date_str)
             if register_old():
                 log("[*] Дальше только старые посты, останавливаюсь")
                 stop_reason = "old"
@@ -289,7 +279,7 @@ async def run_profile(acc: Account, grid_page, post_page, net: Net, username: st
         except SkipPost as e:
             date_str = e.args[0] if e.args else None
             log("    видео, пропуск")
-            mark_skipped(shortcode, "video", date_str)
+            await mark_skipped(shortcode, "video", date_str)
             old_streak = 0
             known_streak = 0
             await asyncio.sleep(random.uniform(args.delay, args.delay * 2))
@@ -302,7 +292,7 @@ async def run_profile(acc: Account, grid_page, post_page, net: Net, username: st
                 posts.append(post)
                 by_code[shortcode] = post
                 result["saved"] += 1
-            save_posts()
+            await store.save_post(pid, username, post)
             if isinstance(e.cause, RateLimited):
                 result.update(
                     status="abort", abort_kind="429", note="429 от Threads (комментарии не добраны)"
@@ -343,7 +333,7 @@ async def run_profile(acc: Account, grid_page, post_page, net: Net, username: st
                 await note_processed(d)
                 old_streak = 0
             result["new_comments"] += post.pop("_stats_new", 0)
-            save_posts()
+            await store.save_post(pid, username, post)
 
         if errors_in_row >= 5:
             result.update(status="abort", note="слишком много ошибок подряд")
@@ -354,7 +344,10 @@ async def run_profile(acc: Account, grid_page, post_page, net: Net, username: st
             break
         await asyncio.sleep(random.uniform(args.delay, args.delay * 2))
 
-    # Всё ниже считается по всему файлу профиля (posts.json), а не только за этот запуск
+    # Читаемый список текстов: один раз за проход (раньше переписывался после каждого поста)
+    write_captions(out_dir / "captions.txt", posts)
+
+    # Всё ниже считается по всем постам профиля (из БД + новые), а не только за этот запуск
     result["media_posts"] = sum(1 for p in posts if p.get("media"))  # постов с медиа
     result["media"] = media_totals(posts)
     result["comments_total"] = sum(len(p.get("comments") or []) for p in posts)
@@ -372,7 +365,9 @@ async def run_profile(acc: Account, grid_page, post_page, net: Net, username: st
         result["note"] = "за выбранный период постов нет"
 
     if result["status"] == "ok":
-        save_anchor(anchor_path, anchor, stop_reason, cutoff, proc_dates, posts, skipped)
+        new_anchor = compute_anchor(anchor, stop_reason, cutoff, proc_dates, posts, skipped)
+        if new_anchor is not None:
+            await store.save_anchor(pid, new_anchor)
     if stop_reason == "known":
         result["note"] = (result["note"] + "; " if result["note"] else "") + "стоп по якорю"
     return result
