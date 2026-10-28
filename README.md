@@ -15,7 +15,7 @@ threads-parser/
 │   ├── config.py      # константы Threads, чтение scripts/.env, Settings
 │   ├── cli.py         # единая точка входа: parse | search | accounts
 │   ├── run.py         # CLI: парсинг профилей
-│   ├── search.py      # CLI: поиск по выдаче Threads
+│   ├── search.py      # CLI: поиск по выдаче Threads, --refilter и --stats (БД, без браузера)
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
 │   ├── dbadmin.py     # CLI: Postgres (migrate/status)
 │   ├── core/  db/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
@@ -97,7 +97,11 @@ uv run scripts/cli.py parse --help                                  # справ
 старого файла не переносятся). Данные профилей из `data/output/<ник>/`: `uv run scripts/dbadmin.py
 import-profiles [ник ...]` (посты, комментарии, пропущенные, якорь; уже имеющиеся в БД не перезаписываются).
 Прокси аккаунта: `uv run scripts/accounts.py proxy NAME URL`.
-Новый отчёт для `accounts.py list` и других команд добавляется записью в `db/stats.py`.
+Новый отчёт для `accounts.py list` и других команд добавляется записью в `db/stats.py`
+(одна `register(Report(...))`, без правок в командах). Отчёты поиска: `uv run scripts/search.py
+--stats` печатает таблицами общую картину (approved/rejected, авторы, средние лайки),
+качество каждого запроса (доля approved среди найденного им в `post_hits`), темы
+approved-постов и состояние очереди `search_jobs`. CSV не формируются.
 
 ### `browser/` — Браузер и аккаунт-воркер
 
