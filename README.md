@@ -17,11 +17,11 @@ threads-parser/
 │   ├── run.py         # CLI: парсинг профилей
 │   ├── search.py      # CLI: поиск по выдаче Threads, --refilter и --stats (БД, без браузера)
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
-│   ├── dbadmin.py     # CLI: Postgres (migrate/status)
+│   ├── dbadmin.py     # CLI: Postgres (migrate/status/import-accounts/import-profiles/import-search)
 │   ├── core/  db/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
-├── data/              # профили, куки, результаты профильного парсера (реестр аккаунтов в Postgres)
+├── data/              # списки профилей и запросов, куки, media/captions.txt/summary.json
+│                         (посты, комментарии, реестр аккаунтов — в Postgres)
 ├── output/search/     # сырые данные --recon (результаты поиска лежат в Postgres)
-├── docs/              # ТЗ на перенос в Postgres и рабочие заметки
 ├── ruff.toml          # единый стиль кода
 └── pyproject.toml
 ```
@@ -93,8 +93,12 @@ uv run scripts/cli.py parse --help                                  # справ
 привязываются к служебной задаче `legacy|запрос|режим`, потому что окно дат в файле не хранилось).
 
 Аккаунты из старого `data/accounts.json` переносятся один раз:
-`uv run scripts/dbadmin.py import-accounts` (только записи аккаунтов; счётчики и `runs[]`
-старого файла не переносятся). Данные профилей из `data/output/<ник>/`: `uv run scripts/dbadmin.py
+`uv run scripts/dbadmin.py import-accounts` (только записи аккаунтов: имя, ник, кука,
+статус, прокси). **История запусков из `accounts.json` (поле `runs[]` и счётчики) намеренно
+не переносится** — это разовое решение, не техническое ограничение: `runs`/`run_accounts`/
+`profile_runs` в БД начинают счёт заново с момента перехода на Postgres, старые цифры
+остаются только в самом JSON-файле (его можно сохранить как архив или удалить). Данные
+профилей из `data/output/<ник>/`: `uv run scripts/dbadmin.py
 import-profiles [ник ...]` (посты, комментарии, пропущенные, якорь; уже имеющиеся в БД не перезаписываются).
 Прокси аккаунта: `uv run scripts/accounts.py proxy NAME URL`.
 Новый отчёт для `accounts.py list` и других команд добавляется записью в `db/stats.py`
@@ -159,9 +163,10 @@ approved-постов и состояние очереди `search_jobs`. CSV н
   (старые `posts.json` с `shortcode/caption/comments_count` приводятся к ним при импорте, `db/legacy.py`).
 - Состояние воркера передаётся объектами (`Net`, `Account`, `Settings`), глобальных
   изменяемых переменных нет; метка лога и счётчики профиля живут в `contextvars` (`core/logs.py`).
-- Слой хранения (Postgres, см. `docs/TZ_threads_parser_postgres.md`) — пакет `db/`; профильный
-  пайплайн получает `ProfileStore` и работает с теми же словарями постов, что раньше были в
-  posts.json, поэтому логика обхода и комментариев не менялась. Поиск работает через `SearchStore` (`serp/store.py`).
+- Слой хранения — Postgres, пакет `db/` (схема и структура — см. раздел «`db/` — Postgres»
+  выше); профильный пайплайн получает `ProfileStore` и работает с теми же словарями постов,
+  что раньше были в posts.json, поэтому логика обхода и комментариев не менялась. Поиск
+  работает через `SearchStore` (`serp/store.py`).
 
 ## Установка
 

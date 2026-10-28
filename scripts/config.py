@@ -32,6 +32,8 @@ class Settings:
     debug: bool = False
     profiles_file: Path = ROOT / "data" / "threads_profiles.txt"
     cookies_dir: Path = ROOT / "data" / "cookies"
+    # Только для разового dbadmin.py import-accounts (старый реестр); сам парсер
+    # аккаунты хранит в Postgres и этот файл не читает.
     accounts_file: Path = ROOT / "data" / "accounts.json"
     export_dir: Path = ROOT / "data" / "export"
     output_dir: Path = ROOT / "data" / "output"

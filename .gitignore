@@ -1,11 +1,18 @@
 scripts/.env
+
+# Куки аккаунтов и их выгрузка (секреты, не SQL-данные)
 data/cookies/*.json
-data/output/*
 data/export/
-data/accounts.json
 !data/cookies/.gitkeep
+
+# Старые JSON-файлы: только источник для разового dbadmin.py import-*, в БД не хранятся
+data/accounts.json
+data/output/*
 !data/output/.gitkeep
+
+# Сырые данные search.py --recon (результаты поиска сами по себе — в Postgres)
+output/
+
 __pycache__/
 .venv/
-
-output
+.ruff_cache/
