@@ -1,41 +1,14 @@
-"""Хранилище результатов поиска: posts.jsonl и jobs.json."""
+"""Хранилище поиска в Postgres: очередь задач (search_jobs), посты и связи post_hits."""
 
-import json
-import os
-from pathlib import Path
+import asyncpg
 
-from core.fsio import read_json, read_jsonl, write_jsonl_atomic
-from registry.store import now_iso
+from db import search as repo
 from serp.tasks import SearchTask
 
 
-class PostStore:
-    """Посты по code (дедуп из ТЗ: «посты по code»). Загружается один раз при
-    старте — повторный запуск не плодит дубли, при обрыве продолжает с того,
-    что уже сохранено."""
-
-    def __init__(self, path: Path):
-        self.path = path
-        self.by_code: dict[str, dict] = {r["code"]: r for r in read_jsonl(path) if r.get("code")}
-        self.new = 0
-        self.dupes = 0
-
-    def add(self, post: dict) -> bool:
-        """True, если пост новый и добавлен."""
-        if post["code"] in self.by_code:
-            self.dupes += 1
-            return False
-        self.by_code[post["code"]] = post
-        self.new += 1
-        return True
-
-    def save(self) -> None:
-        write_jsonl_atomic(self.path, list(self.by_code.values()))
-
-
 def job_key(task: SearchTask) -> str:
-    """Ключ задачи для jobs.json: запрос+режим+окно (без учёта регистра
-    запроса, чтобы «Олх» и «олх» в файле запросов не плодили две записи)."""
+    """Ключ задачи в search_jobs: запрос+режим+окно (без учёта регистра запроса,
+    чтобы «Олх» и «олх» в файле запросов не плодили две записи)."""
     return "|".join(
         (
             task.query.lower(),
@@ -46,45 +19,53 @@ def job_key(task: SearchTask) -> str:
     )
 
 
-def load_jobs(path: Path) -> dict:
-    data = read_json(path, {})
-    return data if isinstance(data, dict) else {}
+class SearchStore:
+    """Общее для воркеров запуска; каждая операция берёт соединение из пула."""
 
+    def __init__(self, pool: asyncpg.Pool):
+        self.pool = pool
 
-def save_jobs(path: Path, jobs: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(jobs, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    async def plan(
+        self, tasks: list[SearchTask], force: bool
+    ) -> tuple[list[tuple[SearchTask, int]], int]:
+        """Заводит задачи в БД. Возвращает ([(задача, id)], сколько готовых пропущено).
 
+        Готовое окно не перезапускается без --force. Повтор одной и той же задачи
+        (одинаковый ключ) в списке схлопывается.
+        """
+        pending: list[tuple[SearchTask, int]] = []
+        seen: set[int] = set()
+        skipped = 0
+        async with self.pool.acquire() as conn, conn.transaction():
+            for task in tasks:
+                job_id, status = await repo.ensure_job(
+                    conn, job_key(task), task.query, task.mode, task.after, task.before
+                )
+                if job_id in seen:
+                    continue
+                seen.add(job_id)
+                if status == "done" and not force:
+                    skipped += 1
+                else:
+                    pending.append((task, job_id))
+        return pending, skipped
 
-def is_job_done(jobs: dict, task: SearchTask, force: bool) -> bool:
-    """Готовое окно не перезапускается, если не указан --force (как --force
-    для anchor.json в run.py)."""
-    if force:
-        return False
-    rec = jobs.get(job_key(task))
-    return bool(rec and rec.get("status") == "done")
+    async def start_job(self, job_id: int, run_id: int, account: str) -> None:
+        async with self.pool.acquire() as conn:
+            await repo.start_job(conn, job_id, run_id, account)
 
+    async def save_posts(self, job_id: int, posts: list[dict]) -> tuple[int, int]:
+        async with self.pool.acquire() as conn:
+            return await repo.save_hits(conn, job_id, posts)
 
-def mark_job_done(jobs: dict, task: SearchTask, **extra) -> None:
-    jobs[job_key(task)] = {
-        "status": "done",
-        "finished_at": now_iso(),
-        "query": task.query,
-        "mode": task.mode,
-        **extra,
-    }
+    async def finish_job(self, job_id: int, found: int, new: int, dupes: int) -> None:
+        async with self.pool.acquire() as conn:
+            await repo.finish_job(conn, job_id, found, new, dupes)
 
+    async def fail_job(self, job_id: int, error: str, retries: int = 0) -> None:
+        async with self.pool.acquire() as conn:
+            await repo.fail_job(conn, job_id, error, retries)
 
-def mark_job_failed(jobs: dict, task: SearchTask, error: str) -> None:
-    """Попытки исчерпаны (429 на всех аккаунтах): задача не «done», но и не в очереди
-    этого запуска. Следующий запуск (без --force) снова возьмёт её в работу, т. к.
-    is_job_done проверяет только status == "done"."""
-    jobs[job_key(task)] = {
-        "status": "failed",
-        "finished_at": now_iso(),
-        "query": task.query,
-        "mode": task.mode,
-        "last_error": error,
-    }
+    async def requeue_job(self, job_id: int, error: str | None, count_retry: bool = True) -> None:
+        async with self.pool.acquire() as conn:
+            await repo.requeue_job(conn, job_id, error, count_retry)

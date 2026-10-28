@@ -1,12 +1,15 @@
 """Разовый перенос старых файлов профилей (posts.json и др.) в Postgres."""
 
+from datetime import date
 from pathlib import Path
 
 import asyncpg
 
 from core.consts import USERNAME_RE
-from core.fsio import read_json
+from core.fsio import read_json, read_jsonl
+from core.timeutil import parse_dt
 from db import posts as repo
+from db import search as search_repo
 from db.runs import ensure_profile
 
 # Старые posts.json хранили shortcode/caption/comments_count; приводим к code/text/reply_count
@@ -89,3 +92,80 @@ async def import_profiles(
         if counts is not None:
             out[d.name] = counts
     return out
+
+
+def _date(s: str | None) -> date | None:
+    try:
+        return date.fromisoformat(s) if s else None
+    except ValueError:
+        return None
+
+
+async def import_search(conn: asyncpg.Connection, posts_path: Path, jobs_path: Path) -> dict:
+    """Переносит jobs.json и posts.jsonl поиска.
+
+    Задачи берутся как есть (статус, счётчики). В posts.jsonl у поста записан только первый
+    нашедший запрос и режим, без окна дат, поэтому связи post_hits идут к служебной задаче
+    «legacy|запрос|режим» (status done). Реальные задачи с окнами она не затрагивает.
+    """
+    res = {"jobs": 0, "jobs_kept": 0, "posts": 0, "posts_kept": 0}
+    jobs = read_json(jobs_path, {})
+    if isinstance(jobs, dict):
+        for key, r in jobs.items():
+            if not isinstance(r, dict) or not r.get("query"):
+                continue
+            parts = key.rsplit("|", 3)
+            after, before = (_date(parts[2]), _date(parts[3])) if len(parts) == 4 else (None, None)
+            status = r.get("status") if r.get("status") in ("done", "failed") else "failed"
+            out = await conn.execute(
+                """
+                INSERT INTO search_jobs (job_key, query, mode, after_date, before_date, status,
+                    finished_at, posts_found, posts_new, posts_dupes, last_error)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                ON CONFLICT (job_key) DO NOTHING
+                """,
+                key,
+                r["query"],
+                r.get("mode") if r.get("mode") in ("top", "recent") else "recent",
+                after,
+                before,
+                status,
+                parse_dt(r.get("finished_at")),
+                r.get("posts") or 0,
+                r.get("new_posts") or 0,
+                r.get("duplicates") or 0,
+                r.get("last_error"),
+            )
+            res["jobs" if out.endswith(" 1") else "jobs_kept"] += 1
+
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for p in read_jsonl(posts_path):
+        if p.get("code") and p.get("username"):
+            mode = p.get("mode") if p.get("mode") in ("top", "recent") else "recent"
+            groups.setdefault((p.get("query") or "", mode), []).append(p)
+    for (query, mode), group in groups.items():
+        job_id = await conn.fetchval(
+            """
+            INSERT INTO search_jobs (job_key, query, mode, status, finished_at)
+            VALUES ($1, $2, $3, 'done', now())
+            ON CONFLICT (job_key) DO UPDATE SET job_key = EXCLUDED.job_key
+            RETURNING id
+            """,
+            f"legacy|{query.lower()}|{mode}",
+            query,
+            mode,
+        )
+        new, dupes = await search_repo.save_hits(conn, job_id, group)
+        await conn.execute(
+            """
+            UPDATE search_jobs SET posts_found = posts_found + $2, posts_new = posts_new + $3,
+                   posts_dupes = posts_dupes + $4 WHERE id = $1
+            """,
+            job_id,
+            len(group),
+            new,
+            dupes,
+        )
+        res["posts"] += new
+        res["posts_kept"] += dupes
+    return res

@@ -6,6 +6,7 @@
     uv run scripts/search.py --file data/threads_queries.txt --since 7d
     uv run scripts/search.py "олх ветка" --after 2026-10-20 --before 2026-10-27 \\
         --window-days 3 --modes recent top
+    uv run scripts/search.py --refilter   # пересчитать approved/rejected в БД
 """
 
 import argparse
@@ -15,7 +16,8 @@ from pathlib import Path
 
 from config import ENV_FILE, load_settings
 from core.timeutil import parse_since
-from serp.filters import filter_posts_file
+from db.pool import run_sync
+from db.search import refilter
 from serp.recon import run_recon
 from serp.runner import run_search
 from serp.tasks import MODES, build_tasks, load_queries, parse_date
@@ -86,13 +88,15 @@ def build_parser(st) -> argparse.ArgumentParser:
     )
     ap.add_argument("--force", action="store_true", help="перезапустить уже готовые окна")
     ap.add_argument(
-        "--output", default=str(st.search_output_dir), help="папка результатов (SEARCH_OUTPUT_DIR)"
+        "--output",
+        default=str(st.search_output_dir),
+        help="папка сырых данных для --recon (SEARCH_OUTPUT_DIR); результаты поиска пишутся в БД",
     )
     ap.add_argument(
-        "--filter",
+        "--refilter",
         action="store_true",
-        help="только отфильтровать уже собранный posts.jsonl на "
-        "approved.jsonl и rejected.jsonl (без парсинга и без браузера)",
+        help="только пересчитать approved/rejected в БД по текущим правилам фильтра "
+        "(посты со старой версией правил; с --force все посты), без браузера",
     )
     return ap
 
@@ -109,36 +113,19 @@ def resolve_window(args):
     return after, before
 
 
-def filter_stored_posts(st, args) -> None:
-    """Отдельный режим: раскладываем готовый posts.jsonl на approved/rejected."""
-    out = Path(args.output)
-    input_path = out / "posts.jsonl"
-
-    if not input_path.exists():
-        raise SystemExit(
-            f"Файл не найден: {input_path}.\n"
-            "Сначала соберите посты обычным запуском (без --filter)."
-        )
-
-    res = filter_posts_file(
-        input_path,
-        out / "approved.jsonl",
-        out / "rejected.jsonl",
-    )
-
-    print(f"[*] Обработано постов: {res['total']}")
-    print(f"[+] approved.jsonl : {res['approved']:5} (содержат olx/олх)")
-    print(f"[+] rejected.jsonl : {res['rejected']:5} (не содержат)")
-    print(f"[*] Папка: {out}")
+def refilter_stored_posts(st, args) -> None:
+    """Отдельный режим: пересчёт filter_status у уже сохранённых постов."""
+    res = run_sync(st, lambda conn: refilter(conn, everything=args.force))
+    print(f"[*] Проверено постов: {res['checked']}, статус изменился: {res['changed']}")
 
 
 def main() -> None:
     st = load_settings()
     args = build_parser(st).parse_args()
 
-    # Режим фильтрации готового файла: без браузера, аккаунтов и запросов
-    if args.filter:
-        filter_stored_posts(st, args)
+    # Пересчёт фильтра в БД: без браузера, аккаунтов и запросов
+    if args.refilter:
+        refilter_stored_posts(st, args)
         return
 
     queries: list[str] = []

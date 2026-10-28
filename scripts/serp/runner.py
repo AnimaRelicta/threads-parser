@@ -3,21 +3,21 @@
 import asyncio
 import random
 import time
-from pathlib import Path
 
 from playwright.async_api import async_playwright
 
 from browser.account import Account
 from browser.net import Net
 from core.logs import log
-from db.pool import run_sync
+from db.pool import create_pool, run_sync
 from db.runs import finalize_run, start_run
+from db.search import release_running_jobs
 from registry.store import pick_accounts
 from scrape.capture import make_handler
 from scrape.dispatch import Dispatcher
 from scrape.page import scroll_down, settle
 from serp.extract import doc_is_useful, harvest_post_pool, iter_search_posts, read_all_embedded
-from serp.store import PostStore, is_job_done, load_jobs, mark_job_done, mark_job_failed, save_jobs
+from serp.store import SearchStore
 from serp.tasks import SearchTask
 
 
@@ -26,9 +26,10 @@ async def process_search_task(
     net,
     task: SearchTask,
     args,
-    post_store: "PostStore",
+    store: SearchStore,
+    job_id: int,
 ) -> dict:
-    """Обрабатывает одну задачу поиска.
+    """Обрабатывает одну задачу поиска; найденные посты сразу пишет в БД.
 
     Возвращает словарь:
     {
@@ -122,17 +123,7 @@ async def process_search_task(
         posts.sort(key=lambda p: p.get("date_utc") or "", reverse=True)
         posts = posts[:max_posts]
 
-    new_posts = 0
-    duplicates = 0
-
-    for post in posts:
-        if post_store.add(post):
-            new_posts += 1
-        else:
-            duplicates += 1
-
-    if new_posts:
-        post_store.save()
+    new_posts, duplicates = await store.save_posts(job_id, posts)
 
     return {
         "status": "ok",
@@ -144,57 +135,49 @@ async def process_search_task(
 
 async def run_search_async(st, args, tasks: list[SearchTask], outcome: dict) -> None:
     """outcome: сюда кладём аккаунты, touched и stats для записи запуска в БД (run_search)."""
+    pool = await create_pool(st, max_size=10)
+    try:
+        await search_with_store(st, args, tasks, outcome, SearchStore(pool))
+    finally:
+        await pool.close()
 
-    out = Path(args.output)
-    out.mkdir(parents=True, exist_ok=True)
 
-    jobs_path = out / "jobs.json"
-    jobs = load_jobs(jobs_path)
-
-    pending: list[SearchTask] = []
-    skipped = 0
-
-    for task in tasks:
-        if is_job_done(jobs, task, args.force):
-            skipped += 1
-            continue
-        pending.append(task)
-
+async def search_with_store(
+    st, args, tasks: list[SearchTask], outcome: dict, store: SearchStore
+) -> None:
+    pending_jobs, skipped = await store.plan(tasks, args.force)
     if skipped:
         log(f"[*] Пропущено готовых задач: {skipped}")
-
-    if not pending:
-        log("[*] Все задачи уже выполнены (см. jobs.json). Используйте --force для перезапуска.")
+    if not pending_jobs:
+        log("[*] Все задачи уже выполнены (search_jobs). Используйте --force для перезапуска.")
         return
 
+    job_ids = {task: job_id for task, job_id in pending_jobs}
+    pending: list[SearchTask] = list(job_ids)
     # Общая очередь на все аккаунты/воркеров, порядок задач перемешан (11.1).
     random.shuffle(pending)
-
-    post_store = PostStore(out / "posts.jsonl")
 
     accounts = await pick_accounts(st, args.accounts)
     outcome["accounts"] = accounts
     n_accounts = len(accounts)
     m = max(1, int(getattr(args, "workers", 1) or 1))
+    run_id = outcome["run_id"]
 
     log(
         f"[*] Аккаунтов: {n_accounts} | воркеров на аккаунт: {m} "
-        f"(одновременно до {n_accounts * m} задач) | задач: {len(pending)} | вывод: {out}"
+        f"(одновременно до {n_accounts * m} задач) | задач: {len(pending)}"
     )
 
     disp = Dispatcher(pending)
     touched: dict[str, dict] = outcome["touched"]  # аккаунт -> {"status", "error"}
     stats: dict[str, dict] = outcome["stats"]  # аккаунт -> {"e429", "eauth"}
-    jobs_lock = asyncio.Lock()
+    closed: set[int] = set()  # id задач, закрытых в этом запуске
+    totals = {"found": 0, "new": 0, "dupes": 0}
 
     def add_stat(account: str, **kw) -> None:
         s = stats.setdefault(account, {})
         for k, v in kw.items():
             s[k] = s.get(k, 0) + v
-
-    async def save_jobs_locked() -> None:
-        async with jobs_lock:
-            save_jobs(jobs_path, jobs)
 
     async def worker(acc: "Account", wid: int, halt: asyncio.Event, pause_state: dict) -> None:
         """Один воркер: своя вкладка на задачу, общая очередь disp, пауза общая на
@@ -210,18 +193,21 @@ async def run_search_async(st, args, tasks: list[SearchTask], outcome: dict) -> 
             if job is None:
                 break
             task, tries = job
+            job_id = job_ids[task]
             try:
-                if is_job_done(jobs, task, args.force):
+                if not args.force and job_id in closed:
                     continue  # уже закрыта другим аккаунтом, пока эта вкладка ждала
 
                 label = task.label()
+                await store.start_job(job_id, run_id, acc.name)
                 page = await acc.ctx.new_page()
                 net.captured.clear()
                 page.on("response", make_handler(net.captured, net))
                 try:
-                    res = await process_search_task(page, net, task, args, post_store)
+                    res = await process_search_task(page, net, task, args, store, job_id)
                 except Exception as e:
-                    log(f"[!] {tag} {label}: ошибка браузера: {type(e).__name__}: {str(e)[:200]}")
+                    err = f"{type(e).__name__}: {str(e)[:150]}"
+                    log(f"[!] {tag} {label}: ошибка браузера/БД: {err}")
                     res = {"status": "error", "posts": 0, "new_posts": 0, "duplicates": 0}
                 finally:
                     try:
@@ -232,8 +218,16 @@ async def run_search_async(st, args, tasks: list[SearchTask], outcome: dict) -> 
                 status = res.get("status")
 
                 if status == "ok":
-                    mark_job_done(jobs, task, **res)
-                    await save_jobs_locked()
+                    await store.finish_job(
+                        job_id,
+                        res.get("posts", 0),
+                        res.get("new_posts", 0),
+                        res.get("duplicates", 0),
+                    )
+                    closed.add(job_id)
+                    totals["found"] += res.get("posts", 0)
+                    totals["new"] += res.get("new_posts", 0)
+                    totals["dupes"] += res.get("duplicates", 0)
                     log(
                         f"[+] {tag} {label}: постов {res.get('posts', 0)}, "
                         f"новых {res.get('new_posts', 0)}, дублей {res.get('duplicates', 0)}"
@@ -244,13 +238,15 @@ async def run_search_async(st, args, tasks: list[SearchTask], outcome: dict) -> 
                     wait = 60 * (tries + 1)
                     pause_state["until"] = max(pause_state["until"], time.monotonic() + wait)
                     if tries + 1 >= n_accounts:
-                        mark_job_failed(jobs, task, f"429: исчерпаны попытки ({tries + 1})")
-                        await save_jobs_locked()
+                        await store.fail_job(
+                            job_id, f"429: исчерпаны попытки ({tries + 1})", tries + 1
+                        )
                         log(
                             f"[!] {tag} {label}: 429, попытки исчерпаны "
                             f"({tries + 1}/{n_accounts}) -> failed"
                         )
                     else:
+                        await store.requeue_job(job_id, "429")
                         disp.put((task, tries + 1))
                         log(
                             f"[!] {tag} {label}: 429, пауза аккаунта {wait} сек, задача "
@@ -264,6 +260,7 @@ async def run_search_async(st, args, tasks: list[SearchTask], outcome: dict) -> 
                         "status": "needs_login",
                         "error": "сессия недействительна (/login)",
                     }
+                    await store.requeue_job(job_id, "сессия аккаунта недействительна", False)
                     disp.put((task, tries))  # не вина задачи — попытки не тратим
                     log(
                         f"[!] {tag} {label}: сессия недействительна. Воркеры аккаунта "
@@ -271,6 +268,7 @@ async def run_search_async(st, args, tasks: list[SearchTask], outcome: dict) -> 
                     )
 
                 else:
+                    await store.fail_job(job_id, f"ошибка: {status}", tries)
                     log(f"[!] {tag} {label}: неожиданный статус: {status}")
             finally:
                 disp.done()
@@ -316,15 +314,10 @@ async def run_search_async(st, args, tasks: list[SearchTask], outcome: dict) -> 
         if isinstance(o, Exception):
             log(f"[!] Аккаунт завершился с ошибкой: {type(o).__name__}: {str(o)[:200]}")
 
-    if post_store.new:
-        post_store.save()
-
     log(
-        f"[✓] Постов в хранилище: {len(post_store.by_code)} "
-        f"(новых за запуск: {post_store.new}, повторов: {post_store.dupes})"
+        f"[✓] Найдено постов: {totals['found']} "
+        f"(новых за запуск: {totals['new']}, повторов: {totals['dupes']})"
     )
-    log(f"[✓] posts.jsonl: {post_store.path}")
-    log(f"[✓] jobs.json: {jobs_path}")
 
 
 def run_search(st, args, tasks: list[SearchTask]) -> None:
@@ -339,27 +332,29 @@ def run_search(st, args, tasks: list[SearchTask]) -> None:
         "headless": bool(args.headless),
     }
     run_id = run_sync(st, lambda conn: start_run(conn, "search", settings))
-    outcome: dict = {"accounts": [], "touched": {}, "stats": {}}
+    outcome: dict = {"run_id": run_id, "accounts": [], "touched": {}, "stats": {}}
     interrupted = False
     try:
         asyncio.run(run_search_async(st, args, tasks, outcome))
     except KeyboardInterrupt:
         interrupted = True
-        print("\n[!] Остановлено пользователем: posts.jsonl и jobs.json сохранены.")
+        print("\n[!] Остановлено: найденное уже в БД, незавершённые задачи остались в очереди.")
     finally:
-        try:
-            run_sync(
-                st,
-                lambda conn: finalize_run(
-                    conn,
-                    run_id,
-                    outcome["accounts"],
-                    outcome["touched"],
-                    outcome["stats"],
-                    {},
-                    {},
-                    interrupted,
-                ),
+
+        async def close_run(conn) -> None:
+            await release_running_jobs(conn, run_id)
+            await finalize_run(
+                conn,
+                run_id,
+                outcome["accounts"],
+                outcome["touched"],
+                outcome["stats"],
+                {},
+                {},
+                interrupted,
             )
+
+        try:
+            run_sync(st, close_run)
         except (Exception, SystemExit) as e:
             log(f"[!] Итоги запуска не записаны в БД (запуск #{run_id}): {str(e)[:200]}")

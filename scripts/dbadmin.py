@@ -6,6 +6,7 @@
     uv run scripts/dbadmin.py status      # применённые миграции и число строк в таблицах
     uv run scripts/dbadmin.py import-accounts   # перенести аккаунты из data/accounts.json
     uv run scripts/dbadmin.py import-profiles   # перенести posts.json, anchor.json и др. профилей
+    uv run scripts/dbadmin.py import-search     # перенести posts.jsonl и jobs.json поиска
     uv run scripts/cli.py db migrate      # то же через единую точку входа
 
 Строка подключения берётся из DATABASE_URL в scripts/.env.
@@ -17,7 +18,7 @@ from pathlib import Path
 
 from config import load_settings
 from db.accounts import import_legacy
-from db.legacy import import_profiles
+from db.legacy import import_profiles, import_search
 from db.migrate import migrate, status
 from db.pool import run_sync
 
@@ -78,6 +79,17 @@ def cmd_import_profiles(st, root: Path | None, only: list[str] | None) -> None:
     print(f"[+] Профилей обработано: {len(res)}, постов перенесено: {total}")
 
 
+def cmd_import_search(st, root: Path | None) -> None:
+    """Разовый перенос результатов поиска из SEARCH_OUTPUT_DIR (posts.jsonl, jobs.json)."""
+    root = root or st.search_output_dir
+    posts_path, jobs_path = root / "posts.jsonl", root / "jobs.json"
+    if not posts_path.exists() and not jobs_path.exists():
+        raise SystemExit(f"В {root} нет ни posts.jsonl, ни jobs.json")
+    r = run_sync(st, lambda conn: import_search(conn, posts_path, jobs_path))
+    print(f"[+] Задач перенесено: {r['jobs']} (уже были: {r['jobs_kept']})")
+    print(f"[+] Постов перенесено: {r['posts']} (уже были в БД: {r['posts_kept']})")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Postgres: миграции и состояние")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -88,10 +100,14 @@ def main() -> None:
     ip = sub.add_parser("import-profiles", help="перенести данные профилей из data/output в БД")
     ip.add_argument("--dir", type=Path, help="по умолчанию OUTPUT_DIR из .env")
     ip.add_argument("profiles", nargs="*", help="только эти профили (по умолчанию все)")
+    isr = sub.add_parser("import-search", help="перенести posts.jsonl и jobs.json поиска в БД")
+    isr.add_argument("--dir", type=Path, help="по умолчанию SEARCH_OUTPUT_DIR из .env")
     args = ap.parse_args()
     st = load_settings()
     try:
-        if args.cmd == "import-profiles":
+        if args.cmd == "import-search":
+            cmd_import_search(st, args.dir)
+        elif args.cmd == "import-profiles":
             cmd_import_profiles(st, args.dir, args.profiles or None)
         elif args.cmd == "import-accounts":
             cmd_import_accounts(st, args.file)

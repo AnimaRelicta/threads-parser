@@ -20,7 +20,7 @@ threads-parser/
 │   ├── dbadmin.py     # CLI: Postgres (migrate/status)
 │   ├── core/  db/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
 ├── data/              # профили, куки, результаты профильного парсера (реестр аккаунтов в Postgres)
-├── output/search/     # результаты поиска (posts.jsonl, jobs.json)
+├── output/search/     # сырые данные --recon (результаты поиска лежат в Postgres)
 ├── docs/              # ТЗ на перенос в Postgres и рабочие заметки
 ├── ruff.toml          # единый стиль кода
 └── pyproject.toml
@@ -71,7 +71,8 @@ uv run scripts/cli.py parse --help                                  # справ
 | `accounts.py` | Таблица `accounts`: чтение, вход, обновление, итог запуска, импорт старого реестра. | `fetch_accounts`, `register_login`, `update_account`, `mark_run`, `import_legacy` |
 | `posts.py` | Посты, комментарии, медиа, якоря и пропущенные посты профиля: запись и чтение в прежнем формате словарей. | `save_post`, `load_profile_posts`, `mark_skipped`, `save_anchor`, `save_meta`, `upsert_topic` |
 | `profiles.py` | Хранилище профильного пайплайна поверх пула: общий для воркеров запуска. | `ProfileStore`, `ProfileState` |
-| `legacy.py` | Разовый перенос старых файлов профилей (posts.json и др.). | `normalize_post`, `import_profiles` |
+| `search.py` | Поиск: очередь `search_jobs`, найденные посты, связи `post_hits`, пересчёт фильтра. | `ensure_job`, `start_job`, `finish_job`, `save_hits`, `refilter` |
+| `legacy.py` | Разовый перенос старых файлов (posts.json профилей, posts.jsonl и jobs.json поиска). | `normalize_post`, `import_profiles`, `import_search` |
 | `runs.py` | Запуски: `runs`, `run_accounts`, `profile_runs`. | `start_run`, `finalize_run`, `save_profile_runs`, `ensure_profile` |
 | `stats.py` | Реестр отчётов (SQL + заголовок) и вывод таблицей. | `Report`, `REPORTS`, `run_report`, `format_table` |
 | `migrations/001_init.sql` | Начальная схема (аккаунты, запуски, профили, посты, комментарии, медиа, поиск, темы). | |
@@ -79,9 +80,17 @@ uv run scripts/cli.py parse --help                                  # справ
 Подготовка: `DATABASE_URL` в `scripts/.env`, затем `uv run scripts/cli.py db migrate`;
 состояние: `uv run scripts/cli.py db status`. Перенос идёт поэтапно: в БД уже живут
 реестр аккаунтов, записи запусков (`runs`, `run_accounts`, `profile_runs`) и весь профильный
-пайплайн (`profiles`, `posts`, `comments`, `media`, `profile_anchors`, `skipped_posts`); задачи
-и посты поиска пока пишутся в JSON-файлы. Файлы в `data/output/<ник>/` теперь только
+пайплайн (`profiles`, `posts`, `comments`, `media`, `profile_anchors`, `skipped_posts`) и поиск
+(`search_jobs`, `posts`, `post_hits`, `topics`). Файлы в `data/output/<ник>/` теперь только
 `media/`, `captions.txt` и итоговый `summary.json`.
+
+Поиск: готовое окно (задача `done`) не перезапускается без `--force`; пост, найденный несколькими
+запросами, хранится один раз, а каждая находка записана в `post_hits`. Статус `approved/rejected`
+считается при сохранении (`filter_version` — версия правил); после правки правил в
+`core/textfilter.py` нужно поднять `FILTER_VERSION` и выполнить `uv run scripts/search.py --refilter`
+(с `--force` пересчитываются все посты). Данные прежних запусков:
+`uv run scripts/dbadmin.py import-search` (`posts.jsonl` и `jobs.json`; находки старых постов
+привязываются к служебной задаче `legacy|запрос|режим`, потому что окно дат в файле не хранилось).
 
 Аккаунты из старого `data/accounts.json` переносятся один раз:
 `uv run scripts/dbadmin.py import-accounts` (только записи аккаунтов; счётчики и `runs[]`
@@ -134,9 +143,8 @@ import-profiles [ник ...]` (посты, комментарии, пропущ�
 | `tasks.py` | Задачи поиска: режимы, URL выдачи, окна дат, список запросов. | `MODES`, `DATE_FMT`, `parse_date`, `build_search_url`, `SearchTask`, `split_windows` … |
 | `extract.py` | Извлечение постов и тем из ответов поиска. | `read_all_embedded`, `find_paths`, `NOISY_KEYS`, `harvest_post_pool`, `doc_is_useful`, `caption_text` … |
 | `recon.py` | Разведка структуры выдачи (--recon). | `run_recon` |
-| `filters.py` | Фильтр «олх» для posts.jsonl (правила в `core/textfilter.py`). | `post_matches_filter`, `filter_posts_file` |
-| `store.py` | Хранилище результатов поиска: posts.jsonl и jobs.json. | `PostStore`, `job_key`, `load_jobs`, `save_jobs`, `is_job_done`, `mark_job_done` … |
-| `runner.py` | Выполнение задач поиска воркерами. | `process_search_task`, `run_search_async`, `run_search` |
+| `store.py` | Хранилище поиска в Postgres: очередь задач, посты, связи с запросами; общее для воркеров запуска. | `job_key`, `SearchStore` |
+| `runner.py` | Выполнение задач поиска воркерами. | `process_search_task`, `run_search_async`, `search_with_store`, `run_search` |
 
 ### Единый стандарт кода
 
@@ -149,7 +157,7 @@ import-profiles [ник ...]` (посты, комментарии, пропущ�
   изменяемых переменных нет; метка лога и счётчики профиля живут в `contextvars` (`core/logs.py`).
 - Слой хранения (Postgres, см. `docs/TZ_threads_parser_postgres.md`) — пакет `db/`; профильный
   пайплайн получает `ProfileStore` и работает с теми же словарями постов, что раньше были в
-  posts.json, поэтому логика обхода и комментариев не менялась. Поиск (`serp/store.py`) пока пишет в JSON.
+  posts.json, поэтому логика обхода и комментариев не менялась. Поиск работает через `SearchStore` (`serp/store.py`).
 
 ## Установка
 

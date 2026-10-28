@@ -1,4 +1,4 @@
-"""Фильтр «олх»: есть ли olx/олх в тексте поста или в его теме."""
+"""Разбор текста поста: фильтр «олх» (текст и тема), хэштеги и упоминания."""
 
 import re
 
@@ -45,3 +45,8 @@ def classify(text: str | None, topic: str | None) -> tuple[str, str | None, str 
             raw = value[m.start() : m.end()] if len(norm) == len(value) else m.group(0)
             return "approved", raw.lower(), where
     return "rejected", None, None
+
+
+def hashtags_mentions(text: str | None) -> tuple[list[str], list[str]]:
+    """(хэштеги, упоминания) так же, как их собирает профильный парсер."""
+    return re.findall(r"#\w+", text or ""), re.findall(r"@[\w.]+", text or "")
