@@ -155,6 +155,68 @@ register(
 )
 
 
+# Профили, отчёт 1: очередь на проверку (review_status) по происхождению профиля.
+register(
+    Report(
+        name="profiles_review_queue",
+        title="Профили: очередь на проверку",
+        sql="""
+            SELECT p.discovered_via,
+                   p.review_status,
+                   count(*) AS profiles,
+                   count(*) FILTER (
+                       WHERE NOT EXISTS (SELECT 1 FROM posts t WHERE t.profile_id = p.id)
+                   ) AS without_threads
+            FROM profiles p
+            GROUP BY p.discovered_via, p.review_status
+            ORDER BY p.discovered_via, p.review_status
+        """,
+        note="without_threads: профилей, у которых ещё нет ни одной собранной ветки",
+    )
+)
+
+# Профили, отчёт 2: ветки быстрого режима (--threads-only) и сколько ещё без разбора.
+register(
+    Report(
+        name="threads_quick",
+        title="Ветки: быстрый сбор и разбор",
+        sql="""
+            SELECT
+                (SELECT coalesce(sum(posts_new), 0) FROM profile_runs
+                 WHERE mode = 'threads') AS collected_quick,
+                (SELECT count(*) FROM posts
+                 WHERE first_seen_via = 'profile' AND last_refreshed_at IS NULL) AS unparsed,
+                (SELECT count(DISTINCT profile_id) FROM posts
+                 WHERE first_seen_via = 'profile' AND last_refreshed_at IS NULL) AS profiles_waiting
+        """,
+        note="collected_quick: новых веток за все запуски --threads-only; unparsed: веток профилей "
+        "без разбора (без постов под веткой, ждут --fill-threads); profiles_waiting: таких профилей",
+    )
+)
+
+# Профили, отчёт 3: последние запуски discover (итоги лежат в runs.settings).
+register(
+    Report(
+        name="discover_runs",
+        title="Поиск новых профилей: последние запуски",
+        sql="""
+            SELECT id,
+                   to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS started,
+                   status,
+                   settings->>'since' AS since,
+                   settings->>'found' AS found,
+                   settings->>'added' AS added,
+                   left(coalesce(error, ''), 40) AS error
+            FROM runs
+            WHERE kind = 'discover'
+            ORDER BY id DESC
+            LIMIT 10
+        """,
+        note="found: кандидатов, added: заведено профилей; пробные запуски --dry-run не пишутся",
+    )
+)
+
+
 async def run_report(conn: asyncpg.Connection, report: Report) -> tuple[list[str], list[tuple]]:
     """(названия колонок, строки); заголовки есть и у пустого результата."""
     stmt = await conn.prepare(report.sql)

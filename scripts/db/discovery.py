@@ -18,6 +18,7 @@ import asyncpg
 
 from config import TH
 from core.consts import USERNAME_RE
+from db.runs import finish_run, start_run
 
 # $1 = нижняя граница периода (NULL = всё время), $2 = регулярка допустимого ника.
 # Дата поста под веткой / ветки: posted_at / date_utc, а если их нет, момент сбора.
@@ -144,3 +145,31 @@ async def discover_authors(
             "Примените миграцию: uv run scripts/cli.py db migrate"
         ) from e
     return result
+
+
+async def discover_tracked(
+    conn: asyncpg.Connection, since: datetime | None, min_mentions: int, settings: dict
+) -> DiscoveryResult:
+    """discover_authors с записью в runs (kind='discover'); итоги лежат в runs.settings."""
+    try:
+        run_id = await start_run(conn, "discover", settings)
+    except asyncpg.CheckViolationError as e:
+        raise SystemExit(
+            "runs.kind не допускает discover. Примените миграцию 004: "
+            "uv run scripts/cli.py db migrate"
+        ) from e
+    try:
+        res = await discover_authors(conn, since, min_mentions)
+    except KeyboardInterrupt:
+        await finish_run(conn, run_id, "interrupted")
+        raise
+    except (Exception, SystemExit) as e:
+        await finish_run(conn, run_id, "error", error=str(e)[:500])
+        raise
+    summary = {
+        "found": len(res.candidates),
+        "added": sum(res.added.values()),
+        "added_by": res.added,
+    }
+    await finish_run(conn, run_id, "ok", summary)
+    return res

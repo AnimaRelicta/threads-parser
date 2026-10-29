@@ -75,10 +75,11 @@ uv run scripts/cli.py parse --help                                  # справ
 | `profiles.py` | Хранилище профильного пайплайна поверх пула: общий для воркеров запуска. | `ProfileStore`, `ProfileState` |
 | `search.py` | Поиск: очередь `search_jobs`, найденные посты, связи `post_hits`, пересчёт фильтра. | `ensure_job`, `start_job`, `finish_job`, `save_hits`, `refilter` |
 | `legacy.py` | Разовый перенос старых файлов (posts.json профилей, posts.jsonl и jobs.json поиска). | `normalize_post`, `import_profiles`, `import_search` |
-| `runs.py` | Запуски: `runs`, `run_accounts`, `profile_runs`. | `start_run`, `finalize_run`, `save_profile_runs`, `ensure_profile` |
+| `runs.py` | Запуски: `runs`, `run_accounts`, `profile_runs`. | `start_run`, `finalize_run`, `finish_run`, `save_profile_runs`, `ensure_profile` |
 | `discovery.py` | Новые профили по авторам: кандидаты из `comments.author` и `posts.author_username`, вставка в `profiles`. | `find_candidates`, `insert_candidates`, `discover_authors` |
 | `stats.py` | Реестр отчётов (SQL + заголовок) и вывод таблицей. | `Report`, `REPORTS`, `run_report`, `format_table` |
 | `migrations/001_init.sql` | Начальная схема (аккаунты, запуски, профили, посты, комментарии, медиа, поиск, темы). | |
+| `migrations/004_audit_runs.sql` | Удалена неиспользуемая `custom_topics`; `runs.kind` = `profiles`/`search`/`discover`/`classify`; комментарий к `skipped_posts`. | |
 | `migrations/003_discovery.sql` | Колонки `profiles`: `discovered_via`, `discovered_from_profile_id`, `review_status`, `mentions_count`, `discovered_first_code`. | |
 
 Подготовка: `DATABASE_URL` в `scripts/.env`, затем `uv run scripts/cli.py db migrate`;
@@ -331,7 +332,7 @@ uv run scripts/run.py --source authors --threads-only --since 7d   # собра�
 (по `lower(username)`), и автор под собственной веткой. Профили создаются с `is_target = true`,
 `review_status = 'pending_review'`, `discovered_from_profile_id` (профиль, под чьей веткой найден
 автор; для `'search'` пусто), `mentions_count` и `discovered_first_code`. Повторный запуск
-ничего не добавляет. `--since` без значения (и без `SINCE` в `.env`) берёт весь накопленный период.
+ничего не добавляет. Запуск пишется в `runs` (`kind='discover'`, итоги `found`/`added` в `settings`; `--dry-run` не пишется). `uv run scripts/discover.py --stats` показывает очередь профилей на проверку, число веток быстрого режима без разбора и последние запуски. `skipped_posts` остаётся: по ней профильный проход пропускает уже виденные старые и видео-ветки. `--since` без значения (и без `SINCE` в `.env`) берёт весь накопленный период.
 
 ### Настройки по умолчанию в `.env`
 

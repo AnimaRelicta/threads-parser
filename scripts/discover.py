@@ -15,9 +15,12 @@ import argparse
 
 from config import ENV_FILE, load_settings
 from core.timeutil import parse_since
-from db.discovery import Candidate, discover_authors
+from db.discovery import Candidate, discover_authors, discover_tracked
 from db.pool import run_sync
+from db.stats import REPORTS, format_table, run_report
 
+# Отчёты по профилям, в порядке вывода --stats (сами отчёты — в db/stats.py).
+STATS_REPORTS = ["profiles_review_queue", "threads_quick", "discover_runs"]
 VIA_TITLE = {"author": "авторы постов под ветками", "search": "авторы веток из поиска"}
 
 
@@ -48,7 +51,30 @@ def build_parser(st) -> argparse.ArgumentParser:
         default=15,
         help="сколько кандидатов вывести в список, 0 = все (по умолчанию 15)",
     )
+    ap.add_argument(
+        "--stats",
+        action="store_true",
+        help="отдельный режим: очередь профилей на проверку, ветки быстрого режима, "
+        "запуски discover (поиск не выполняется)",
+    )
     return ap
+
+
+def print_stats(st) -> None:
+    """Таблицы отчётов из БД (см. STATS_REPORTS)."""
+
+    async def _all(conn):
+        return [(name, *await run_report(conn, REPORTS[name])) for name in STATS_REPORTS]
+
+    for name, cols, rows in run_sync(st, _all):
+        report = REPORTS[name]
+        print(f"\n### {report.title}")
+        if not rows:
+            print("(нет данных)")
+            continue
+        print(format_table(cols, rows))
+        if report.note:
+            print(report.note)
 
 
 def print_candidates(candidates: list[Candidate], show: int) -> None:
@@ -64,8 +90,15 @@ def main() -> None:
     args = build_parser(st).parse_args()
     if args.min_mentions < 1:
         raise SystemExit("--min-mentions должен быть не меньше 1")
+    if args.stats:
+        print_stats(st)
+        return
     since = parse_since(args.since)
-    res = run_sync(st, lambda conn: discover_authors(conn, since, args.min_mentions, args.dry_run))
+    if args.dry_run:  # пробный просмотр в runs не пишется
+        res = run_sync(st, lambda conn: discover_authors(conn, since, args.min_mentions, True))
+    else:
+        settings = {"since": args.since, "min_mentions": args.min_mentions}
+        res = run_sync(st, lambda conn: discover_tracked(conn, since, args.min_mentions, settings))
     period = f"с {since:%Y-%m-%d %H:%M} UTC" if since else "за всё время"
     total = len(res.candidates)
     if not total:

@@ -11,7 +11,7 @@ from db import accounts as accounts_repo
 
 
 async def start_run(conn: asyncpg.Connection, kind: str, settings: dict) -> int:
-    """Новая запись runs со статусом running. kind: profiles | search."""
+    """Новая запись runs со статусом running. kind: profiles | search | discover | classify."""
     return await conn.fetchval(
         "INSERT INTO runs (kind, settings) VALUES ($1, $2) RETURNING id", kind, settings
     )
@@ -35,6 +35,27 @@ async def ensure_profile(
         username,
         f"{TH}/@{username}",
         scraped_at,
+    )
+
+
+async def finish_run(
+    conn: asyncpg.Connection,
+    run_id: int,
+    status: str,
+    summary: dict | None = None,
+    error: str | None = None,
+) -> None:
+    """Закрывает запуск без аккаунтов (discover, classify): итоги дописываются в settings.
+
+    status: ok | error | interrupted. Для запусков с аккаунтами есть finalize_run.
+    """
+    await conn.execute(
+        "UPDATE runs SET status = $2, finished_at = now(), "
+        "settings = settings || $3::jsonb, error = $4 WHERE id = $1",
+        run_id,
+        status,
+        summary or {},
+        error,
     )
 
 
