@@ -18,6 +18,7 @@ from config import Settings
 from core.consts import USERNAME_RE
 from core.fsio import normalize_username, read_usernames
 from core.logs import PSTAT, TAG, log
+from core.spam import rules_with
 from core.timeutil import parse_since
 from db.pool import DB_ERRORS, create_pool, run_sync
 from db.profiles import ProfileStore, list_targets
@@ -265,7 +266,7 @@ async def main_async(
     disp = Dispatcher(usernames)
     # Пул на весь запуск: воркеры берут соединения на время одной записи
     pool = await create_pool(st, max_size=max(5, len(accounts) * m + 2))
-    state.store = ProfileStore(pool, Path(args.output))
+    state.store = ProfileStore(pool, Path(args.output), rules_with(st.spam_min_followers))
     try:
         async with async_playwright() as p:
             outcomes = await asyncio.gather(

@@ -5,6 +5,7 @@
 
 from browser.net import Net
 from config import TH
+from core.followers import followers_from_json, followers_from_og
 from core.logs import log
 from db.profiles import ProfileStore
 from scrape.extract import read_embedded
@@ -46,6 +47,19 @@ async def open_profile(
 
     meta = await grid_page.evaluate(META_JS)
     meta.update({"username": username, "url": f"{TH}/@{username}"})
+    meta["followers"] = followers_from_og(meta.get("og_description"))
+    if meta["followers"] is None:  # запасной путь: JSON страницы
+        try:
+            scripts = await grid_page.eval_on_selector_all(
+                'script[type="application/json"]',
+                "els => els.map(e => e.textContent).filter(t => t && t.includes('follower_count'))",
+            )
+            meta["followers"] = followers_from_json(scripts, username)
+        except Exception:
+            pass
     await store.save_meta(profile_id, meta)
-    log(f"[+] {meta.get('og_title') or meta.get('title')}")
+    log(
+        f"[+] {meta.get('og_title') or meta.get('title')}"
+        f" | подписчиков: {meta['followers'] if meta['followers'] is not None else '?'}"
+    )
     return feed, None

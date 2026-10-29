@@ -52,6 +52,9 @@ class Settings:
     llm_workers: int = 2
     llm_sample_threads: int = 10  # сколько последних веток профиля идёт в контекст
 
+    # --- спам-детектор (core/spam.py) ----------------------------------------
+    spam_min_followers: int = 1000  # SPAM_MIN_FOLLOWERS: столько подписчиков и больше = не спам
+
     # Postgres и Proxy для поиска
     database_url: str | None = None  # DATABASE_URL (пароль только в scripts/.env, не в коде)
     proxy: str | None = None  # PROXY, например socks5://127.0.0.1:12334
@@ -145,6 +148,7 @@ def load_settings() -> Settings:
         llm_max_retries=max(0, _int(get("LLM_MAX_RETRIES"), 3)),
         llm_workers=max(1, _int(get("LLM_WORKERS"), 2)),
         llm_sample_threads=max(1, _int(get("LLM_SAMPLE_THREADS"), 10)),
+        spam_min_followers=max(0, _int(get("SPAM_MIN_FOLLOWERS"), 1000)),
         database_url=(get("DATABASE_URL") or "").strip() or None,
         proxy=(get("PROXY") or "").strip() or None,
     )

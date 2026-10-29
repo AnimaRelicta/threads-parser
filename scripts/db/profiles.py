@@ -8,14 +8,17 @@ import asyncpg
 
 from core.consts import USERNAME_RE
 from core.fsio import normalize_username
+from core.spam import RULES, SpamRules, Verdict
 from db import posts as repo
+from db import spam as spam_repo
 from db.runs import ensure_profile
 
 SOURCE_SQL = {
-    "all": "p.is_target",
-    "new": "p.is_target AND NOT EXISTS (SELECT 1 FROM posts t WHERE t.profile_id = p.id)",
-    "search": "p.is_target AND p.discovered_via = 'search'",
-    "authors": "p.is_target AND p.discovered_via = 'author'",
+    "all": "p.is_target AND NOT p.is_banned",
+    "new": "p.is_target AND NOT p.is_banned "
+    "AND NOT EXISTS (SELECT 1 FROM posts t WHERE t.profile_id = p.id)",
+    "search": "p.is_target AND NOT p.is_banned AND p.discovered_via = 'search'",
+    "authors": "p.is_target AND NOT p.is_banned AND p.discovered_via = 'author'",
 }
 NEEDS_DISCOVERY = ("search", "authors")
 
@@ -68,7 +71,15 @@ async def list_targets(
     if review_status:
         where += " AND p.review_status = $1"
         args.append(review_status)
-    rows = await conn.fetch(f"SELECT p.username FROM profiles p WHERE {where} ORDER BY p.id", *args)
+    try:
+        rows = await conn.fetch(
+            f"SELECT p.username FROM profiles p WHERE {where} ORDER BY p.id", *args
+        )
+    except asyncpg.UndefinedColumnError as e:
+        raise SystemExit(
+            f"В profiles нет колонок бана ({e}). Примените миграцию 006: "
+            "uv run scripts/cli.py db migrate"
+        ) from e
     return [r["username"] for r in rows]
 
 
@@ -85,9 +96,10 @@ class ProfileState:
 class ProfileStore:
     """Общий для всех воркеров запуска; media_root = каталог вывода (OUTPUT_DIR)."""
 
-    def __init__(self, pool: asyncpg.Pool, media_root: Path):
+    def __init__(self, pool: asyncpg.Pool, media_root: Path, spam_rules: SpamRules = RULES):
         self.pool = pool
         self.media_root = media_root
+        self.spam_rules = spam_rules  # пороги спам-детектора (в т. ч. SPAM_MIN_FOLLOWERS)
 
     async def load(self, username: str) -> ProfileState:
         async with self.pool.acquire() as conn:
@@ -135,3 +147,17 @@ class ProfileStore:
     async def save_threads_light(self, profile_id: int, username: str, items: list[dict]) -> None:
         async with self.pool.acquire() as conn:
             await repo.save_threads_light(conn, profile_id, username, items)
+
+    async def followers_count(self, profile_id: int) -> int | None:
+        async with self.pool.acquire() as conn:
+            return await spam_repo.followers_count(conn, profile_id)
+
+    async def banned_reason(self, profile_id: int) -> str | None:
+        """Причина бана профиля или None, если он не забанен."""
+        async with self.pool.acquire() as conn:
+            return await spam_repo.banned_reason(conn, profile_id)
+
+    async def save_spam_verdict(self, profile_id: int, verdict: Verdict) -> bool:
+        """Записывает вердикт спам-детектора; True, если профиль теперь забанен."""
+        async with self.pool.acquire() as conn:
+            return await spam_repo.save_verdict(conn, profile_id, verdict)

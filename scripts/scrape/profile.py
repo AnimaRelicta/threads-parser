@@ -24,6 +24,7 @@ from scrape.posts import (
     write_captions,
 )
 from scrape.report import media_totals
+from scrape.spamcheck import check_feed
 
 
 async def run_profile(
@@ -62,9 +63,20 @@ async def run_profile(
 
     skipped = state.skipped
 
+    ban = await store.banned_reason(pid)
+    if ban:
+        log(f"[BAN] @{username} уже забанен: {ban}")
+        result.update(status="banned", note=f"в бане: {ban}")
+        return result
+
     feed, fail = await open_profile(grid_page, net, username, pid, store)
     if fail:
         result.update(fail)
+        return result
+    # Спам-проверка по ленте до открытия веток: на бота не тратим ни браузер, ни комментарии
+    verdict = await check_feed(store, pid, username, feed.items, own_only=True)
+    if verdict.is_spam and await store.banned_reason(pid):
+        result.update(status="banned", stop_reason="spam", note=verdict.reason)
         return result
 
     # Якорь: после первого прохода по окну лежит в profile_anchors; дальше обход

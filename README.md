@@ -19,6 +19,7 @@ threads-parser/
 │   ├── discover.py    # CLI: новые профили по авторам постов и веток (БД, без браузера)
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
 │   ├── dbadmin.py     # CLI: Postgres (migrate/status/import-accounts/import-profiles/import-search)
+│   ├── spam.py        # CLI: спам-профили (проверка по БД, список банов, разбан)
 │   ├── classify/      # пакет: категории профилей через LLM (запуск: cli.py classify)
 │   ├── core/  db/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
 ├── data/              # списки профилей и запросов, куки, media/captions.txt/summary.json
@@ -82,6 +83,7 @@ uv run scripts/cli.py parse --help                                  # справ
 | `stats.py` | Реестр отчётов (SQL + заголовок) и вывод таблицей. | `Report`, `REPORTS`, `run_report`, `format_table` |
 | `migrations/001_init.sql` | Начальная схема (аккаунты, запуски, профили, посты, комментарии, медиа, поиск, темы). | |
 | `migrations/005_categories.sql` | Справочник `categories` (7 категорий), колонки категории в `profiles`, триггер допустимых переходов `review_status`. | |
+| `migrations/006_spam_ban.sql` | Колонки `profiles.is_banned`, `ban_reason`, `banned_at`, `spam_score`, `spam_signals`, `spam_checked_at`, `spam_whitelist`. | |
 | `migrations/004_audit_runs.sql` | Удалена неиспользуемая `custom_topics`; `runs.kind` = `profiles`/`search`/`discover`/`classify`; комментарий к `skipped_posts`. | |
 | `migrations/003_discovery.sql` | Колонки `profiles`: `discovered_via`, `discovered_from_profile_id`, `review_status`, `mentions_count`, `discovered_first_code`. | |
 
@@ -331,6 +333,31 @@ uv run scripts/cli.py classify --stats                          # категор
 Ошибки proxy API (таймаут, 429, 5xx, невалидный ответ) дают `review_failed` и не останавливают
 запуск; 401/403 останавливают его целиком, профиль остаётся как был. Запуск пишется в `runs`
 (`kind='classify'`, итоги в `settings`).
+
+### Спам-профили и автобан: `core/spam.py`, `spam.py`
+
+Бот-профили (ветки каждые 15 минут, без ответов и лайков, одинаковые тексты) отсеиваются сразу по ленте профиля, до открытия веток: в `--threads-only` и в полном проходе сразу после входа в профиль, в `--threads-only` ещё раз по всем собранным веткам. Профиль получает `is_banned = true` и выпадает из `--source`, `--fill-threads`, `classify`. Данные не удаляются.
+
+| Сигнал | Условие | Баллы |
+|---|---|---|
+| `no_engagement` | >= 90% веток без ответов, лайков (<= 1), репостов и цитат | 40 |
+| `high_frequency` | медиана паузы <= 30 мин или >= 48 веток в любые сутки | 30 |
+| `metronome` | >= 60% пауз почти равны медиане (±25%, не меньше 2 мин), медиана <= 3 ч | 30 |
+| `templated` | >= 50% текстов повторяют более ранние (после нормализации чисел, ссылок, знаков) | 25 |
+| `link_spam` | ссылка в >= 70% веток | 15 |
+
+Подписчиков >= `SPAM_MIN_FOLLOWERS` (по умолчанию 1000, `0` = отключено, число берётся из `profiles.followers_count`, миграция 007): не спам при любых сигналах; число неизвестно (`NULL`): проверка как обычно.
+
+Бан: есть `no_engagement` и сумма >= 70. Меньше 8 веток в выборке: вердикт «не спам». Пороги правятся в `SpamRules` (`core/spam.py`).
+
+```bash
+uv run scripts/cli.py db migrate                      # миграция 006
+uv run scripts/cli.py spam --check                    # пробный прогон по накопленным веткам
+uv run scripts/cli.py spam --check --apply            # забанить найденных
+uv run scripts/cli.py spam --check adina.rahatt       # один профиль, со всеми метриками
+uv run scripts/cli.py spam --list                     # кто в бане и почему
+uv run scripts/cli.py spam --unban adina.rahatt       # снять бан и больше не банить
+```
 
 ### Разбор собранных веток: `--fill-threads` и выбор профилей `--source`
 

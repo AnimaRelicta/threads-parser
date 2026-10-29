@@ -15,6 +15,7 @@ from db.profiles import ProfileStore
 from scrape.consts import OLD_STREAK_STOP, PINNED_LOOKAHEAD
 from scrape.entry import open_profile
 from scrape.feed import Lookahead, iter_post_links
+from scrape.spamcheck import check_feed
 
 FLUSH_EVERY = 10  # сколько веток копим перед записью в БД
 NO_DATA_WAIT_MS = 1500  # ждём JSON ленты, если ссылка уже есть, а данных ещё нет
@@ -37,9 +38,19 @@ async def run_threads(grid_page, net: Net, username: str, args, store: ProfileSt
     cnt = {"refreshed": 0, "skipped_old": 0, "skipped_video": 0, "unchanged": 0}
 
     pid = await store.ensure_profile(username)
+    ban = await store.banned_reason(pid)
+    if ban:
+        log(f"[BAN] @{username} уже забанен: {ban}")
+        result.update(status="banned", note=f"в бане: {ban}")
+        return result
     feed, fail = await open_profile(grid_page, net, username, pid, store)
     if fail:
         result.update(fail)
+        return result
+    # Спам видно по первой странице ленты: бот не стоит дальнейшей прокрутки
+    verdict = await check_feed(store, pid, username, feed.items, own_only=True)
+    if verdict.is_spam and await store.banned_reason(pid):
+        result.update(status="banned", stop_reason="spam", note=verdict.reason)
         return result
 
     full = bool(getattr(args, "full", False))
@@ -66,7 +77,9 @@ async def run_threads(grid_page, net: Net, username: str, args, store: ProfileSt
     stop_reason = "end"  # end | old | limit | known
     old_streak = known_streak = taken = no_data = seen = 0
     dates: list[datetime] = []
+    collected: list[dict] = []  # все ветки прохода для итоговой спам-проверки
     found_any = False
+    spam_note = ""
 
     async for code, _ in links:
         found_any = True
@@ -98,6 +111,7 @@ async def run_threads(grid_page, net: Net, username: str, args, store: ProfileSt
 
         dates.append(datetime.fromtimestamp(ts, tz=timezone.utc))
         batch.append({"code": code, **info})
+        collected.append(info)
         if is_known:
             cnt["unchanged"] += 1
             if stop_after and not pinned:
@@ -111,6 +125,12 @@ async def run_threads(grid_page, net: Net, username: str, args, store: ProfileSt
         )
         if len(batch) >= FLUSH_EVERY:
             await flush()
+            # спам видно уже по первым десяткам веток: не крутим ленту до конца
+            verdict = await check_feed(store, pid, username, collected)
+            if verdict.is_spam and await store.banned_reason(pid):
+                spam_note = verdict.reason
+                stop_reason = "spam"
+                break
         if stop_after and known_streak >= stop_after:
             log(f"[*] {known_streak} известных веток подряд: останавливаюсь (--full отключает)")
             stop_reason = "known"
@@ -122,6 +142,17 @@ async def run_threads(grid_page, net: Net, username: str, args, store: ProfileSt
                 break
         await asyncio.sleep(0)  # отдаём управление другим воркерам
     await flush()
+
+    if spam_note:
+        result.update(status="banned", stop_reason="spam", note=spam_note)
+        return result
+
+    # Итоговая проверка по всем собранным веткам: первая страница могла не набрать выборку
+    if result["status"] == "ok" and collected:
+        verdict = await check_feed(store, pid, username, collected)
+        if verdict.is_spam and await store.banned_reason(pid):
+            result.update(status="banned", stop_reason="spam", note=verdict.reason)
+            return result
 
     result["counts"] = cnt
     result["stop_reason"] = stop_reason

@@ -42,6 +42,11 @@ async def run_fill(
     }
     cnt = {"refreshed": 0, "skipped_old": 0, "skipped_video": 0, "unchanged": 0}
     pid = await store.ensure_profile(username)
+    ban = await store.banned_reason(pid)
+    if ban:
+        log(f"[BAN] @{username} в бане: {ban}")
+        result.update(status="banned", note=f"в бане: {ban}", counts=cnt, stop_reason="end")
+        return result
     pending = await store.pending_threads(pid, args.cutoff, args.limit or None)
     if not pending:
         result.update(status="empty", note="нет неразобранных веток за период (--threads-only)")
