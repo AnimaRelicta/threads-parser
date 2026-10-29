@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Единая точка входа проекта: подкоманды parse, search, accounts, db.
+"""Единая точка входа проекта: подкоманды parse, search, discover, accounts, db.
 
 Примеры (из корня проекта):
     uv run scripts/cli.py parse olx_vetka_astana --limit 5 --comments
     uv run scripts/cli.py search "олх ветка астана" --since 7d
+    uv run scripts/cli.py discover --since 7d --dry-run   # новые профили по авторам
     uv run scripts/cli.py accounts check --headless
     uv run scripts/cli.py db migrate          # схема Postgres
     uv run scripts/cli.py parse --help        # справка подкоманды
@@ -18,6 +19,7 @@ import sys
 COMMANDS = {
     "parse": ("run", "парсинг профилей: посты, медиа, комментарии (run.py)"),
     "search": ("search", "поиск по Threads: посты по запросам (search.py)"),
+    "discover": ("discover", "новые профили по авторам постов и веток (discover.py)"),
     "accounts": ("accounts", "аккаунты: add, list, relogin, check, export, import (accounts.py)"),
     "db": ("dbadmin", "база Postgres: migrate, status (dbadmin.py)"),
 }

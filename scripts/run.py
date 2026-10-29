@@ -43,7 +43,7 @@ def build_parser(st) -> argparse.ArgumentParser:
     ap.add_argument(
         "--source",
         help="откуда взять профили из БД: all (is_target), new (ещё без веток), "
-        "search, authors (после шага «поиск по авторам») или ники через запятую; "
+        "search, authors (найдены discover.py) или ники через запятую; "
         "добавляется к профилю из командной строки и к --file",
     )
     ap.add_argument(

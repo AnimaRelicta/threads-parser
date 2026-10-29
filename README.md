@@ -13,9 +13,10 @@ threads-parser/
 ├── scripts/
 │   ├── .env.example   # шаблон настроек (копия -> scripts/.env, в git не попадает)
 │   ├── config.py      # константы Threads, чтение scripts/.env, Settings
-│   ├── cli.py         # единая точка входа: parse | search | accounts
+│   ├── cli.py         # единая точка входа: parse | search | discover | accounts
 │   ├── run.py         # CLI: парсинг профилей
 │   ├── search.py      # CLI: поиск по выдаче Threads, --refilter и --stats (БД, без браузера)
+│   ├── discover.py    # CLI: новые профили по авторам постов и веток (БД, без браузера)
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
 │   ├── dbadmin.py     # CLI: Postgres (migrate/status/import-accounts/import-profiles/import-search)
 │   ├── core/  db/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
@@ -31,6 +32,7 @@ threads-parser/
 ```bash
 uv run scripts/cli.py parse olx_vetka_astana --limit 5 --comments   # = run.py
 uv run scripts/cli.py search "олх ветка астана" --since 7d          # = search.py
+uv run scripts/cli.py discover --since 7d --dry-run                 # = discover.py
 uv run scripts/cli.py accounts check --headless                     # = accounts.py
 uv run scripts/cli.py db migrate                                    # = dbadmin.py
 uv run scripts/cli.py parse --help                                  # справка подкоманды
@@ -74,8 +76,10 @@ uv run scripts/cli.py parse --help                                  # справ
 | `search.py` | Поиск: очередь `search_jobs`, найденные посты, связи `post_hits`, пересчёт фильтра. | `ensure_job`, `start_job`, `finish_job`, `save_hits`, `refilter` |
 | `legacy.py` | Разовый перенос старых файлов (posts.json профилей, posts.jsonl и jobs.json поиска). | `normalize_post`, `import_profiles`, `import_search` |
 | `runs.py` | Запуски: `runs`, `run_accounts`, `profile_runs`. | `start_run`, `finalize_run`, `save_profile_runs`, `ensure_profile` |
+| `discovery.py` | Новые профили по авторам: кандидаты из `comments.author` и `posts.author_username`, вставка в `profiles`. | `find_candidates`, `insert_candidates`, `discover_authors` |
 | `stats.py` | Реестр отчётов (SQL + заголовок) и вывод таблицей. | `Report`, `REPORTS`, `run_report`, `format_table` |
 | `migrations/001_init.sql` | Начальная схема (аккаунты, запуски, профили, посты, комментарии, медиа, поиск, темы). | |
+| `migrations/003_discovery.sql` | Колонки `profiles`: `discovered_via`, `discovered_from_profile_id`, `review_status`, `mentions_count`, `discovered_first_code`. | |
 
 Подготовка: `DATABASE_URL` в `scripts/.env`, затем `uv run scripts/cli.py db migrate`;
 состояние: `uv run scripts/cli.py db status`. Перенос идёт поэтапно: в БД уже живут
@@ -307,8 +311,27 @@ uv run scripts/run.py --source all --fill-threads --since 7d --limit 50
 
 `--source` берёт профили из БД и добавляет их к профилю из командной строки и к `--file`:
 `all` (все с `is_target`), `new` (профили, у которых ещё нет ни одной ветки), `ник1,ник2`.
-Значения `search` и `authors` появятся с шагом «поиск по авторам». Функция выбора —
-`list_targets()` в `db/profiles.py`.
+`search` (профили с `discovered_via='search'`) и `authors` (`discovered_via='author'`) работают
+после миграции `003_discovery` и `discover.py`. Функция выбора — `list_targets()` в
+`db/profiles.py`. Внимание: профили, заведённые `discover.py`, получают `is_target = true`,
+поэтому входят и в `--source all`; отобрать только их можно через `--source authors` / `search`.
+
+### Новые профили по авторам: `discover.py`
+
+```bash
+uv run scripts/discover.py --since 7d --dry-run            # показать кандидатов, ничего не писать
+uv run scripts/discover.py --since 7d                      # завести профили
+uv run scripts/discover.py --since 1m --min-mentions 3     # только авторов, встретившихся 3+ раза
+uv run scripts/run.py --source authors --threads-only --since 7d   # собрать ветки новых профилей
+```
+
+Работает только с БД. Кандидаты: авторы постов под ветками (`comments.author`) -> `discovered_via='author'`
+и авторы веток из поиска (`posts.author_username` при `profile_id IS NULL`) -> `'search'`; если ник
+встретился в обоих местах, берётся `'search'`. Исключаются ники, уже имеющиеся в `profiles`
+(по `lower(username)`), и автор под собственной веткой. Профили создаются с `is_target = true`,
+`review_status = 'pending_review'`, `discovered_from_profile_id` (профиль, под чьей веткой найден
+автор; для `'search'` пусто), `mentions_count` и `discovered_first_code`. Повторный запуск
+ничего не добавляет. `--since` без значения (и без `SINCE` в `.env`) берёт весь накопленный период.
 
 ### Настройки по умолчанию в `.env`
 

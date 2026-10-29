@@ -52,7 +52,7 @@ async def list_targets(
     """Ники профилей для запуска: all | new | search | authors | «ник1,ник2».
 
     search и authors опираются на profiles.discovered_via, review_status на
-    profiles.review_status (миграция шага «поиск по авторам»); без неё понятная ошибка.
+    profiles.review_status (миграция 003_discovery); без неё понятная ошибка.
     """
     kind, names = parse_source(source)
     if kind == "list":
@@ -62,7 +62,7 @@ async def list_targets(
     ):
         raise SystemExit(
             f"--source {kind}: в profiles нет discovered_via/review_status "
-            "(появляются на шаге «поиск по авторам»), пока доступны all, new и список ников"
+            "(миграция 003_discovery): uv run scripts/cli.py db migrate"
         )
     where, args = SOURCE_SQL[kind], []
     if review_status:
