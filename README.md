@@ -19,6 +19,7 @@ threads-parser/
 │   ├── discover.py    # CLI: новые профили по авторам постов и веток (БД, без браузера)
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
 │   ├── dbadmin.py     # CLI: Postgres (migrate/status/import-accounts/import-profiles/import-search)
+│   ├── classify/      # пакет: категории профилей через LLM (запуск: cli.py classify)
 │   ├── core/  db/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
 ├── data/              # списки профилей и запросов, куки, media/captions.txt/summary.json
 │                         (посты, комментарии, реестр аккаунтов — в Postgres)
@@ -49,6 +50,7 @@ uv run scripts/cli.py parse --help                                  # справ
 `core` ← `db` ← `registry.store`, `registry.cookies` ← `browser` ← `registry.login`, `registry.commands` и `scrape` ← `serp` ← CLI (`run.py`, `search.py`, `accounts.py`).
 
 - `core` не импортирует другие пакеты проекта (только `config`).
+- `classify` берёт только `core`, `db` и `config`, без браузера; запускается через `cli.py classify` (файл не называется `classify.py`, чтобы не совпасть с именем пакета).
 - `serp` берёт из `scrape` и `browser` перехват ответов, прокрутку и воркеры; обратно — нет.
 - Модули импортируются как `from scrape.posts import scrape_post`: `scripts/` — корень импортов.
 
@@ -79,6 +81,7 @@ uv run scripts/cli.py parse --help                                  # справ
 | `discovery.py` | Новые профили по авторам: кандидаты из `comments.author` и `posts.author_username`, вставка в `profiles`. | `find_candidates`, `insert_candidates`, `discover_authors` |
 | `stats.py` | Реестр отчётов (SQL + заголовок) и вывод таблицей. | `Report`, `REPORTS`, `run_report`, `format_table` |
 | `migrations/001_init.sql` | Начальная схема (аккаунты, запуски, профили, посты, комментарии, медиа, поиск, темы). | |
+| `migrations/005_categories.sql` | Справочник `categories` (7 категорий), колонки категории в `profiles`, триггер допустимых переходов `review_status`. | |
 | `migrations/004_audit_runs.sql` | Удалена неиспользуемая `custom_topics`; `runs.kind` = `profiles`/`search`/`discover`/`classify`; комментарий к `skipped_posts`. | |
 | `migrations/003_discovery.sql` | Колонки `profiles`: `discovered_via`, `discovered_from_profile_id`, `review_status`, `mentions_count`, `discovered_first_code`. | |
 
@@ -161,6 +164,16 @@ approved-постов и состояние очереди `search_jobs`. CSV н
 | `recon.py` | Разведка структуры выдачи (--recon). | `run_recon` |
 | `store.py` | Хранилище поиска в Postgres: очередь задач, посты, связи с запросами; общее для воркеров запуска. | `job_key`, `SearchStore` |
 | `runner.py` | Выполнение задач поиска воркерами. | `process_search_task`, `run_search_async`, `search_with_store`, `run_search` |
+
+### `classify/` — Категории профилей через LLM (`cli.py classify`)
+
+| Модуль | Назначение | Основное содержимое |
+|---|---|---|
+| `client.py` | HTTP-клиент к proxy API модели (формат OpenAI chat/completions), стандартная библиотека, повторы при 429/5xx/таймауте. | `LLMClient`, `LLMError`, `LLMAuthError` |
+| `prompts.py` | Системный промпт с категориями из `categories`, пользовательский с профилем и ветками. | `PROMPT_VERSION`, `build_system_prompt`, `build_user_prompt` |
+| `classifier.py` | Профиль и ветки -> категория; плохой JSON и неизвестный код дают `other` с пометкой. | `classify_profile`, `parse_answer`, `ClassifyResult` |
+| `runner.py` | Воркеры: выборка `FOR UPDATE SKIP LOCKED`, запись категории и `review_status`, учёт в `runs`. | `run_classify` |
+| `cli.py` | Подкоманда `classify`. | `main` |
 
 ### Единый стандарт кода
 
@@ -294,6 +307,30 @@ uv run scripts/run.py --threads-only --since 1m          # профили из d
 `--accounts`, `--workers`, `--delay`, `--headless`; флаги про содержимое ветки
 (`--comments`, `--depth`, `--with-videos` и т. п.) игнорируются с предупреждением.
 В `profile_runs` такой запуск пишется с `mode='threads'`; колонки `posts_*` в нём считают ветки.
+
+### Категории профилей: `classify`
+
+```bash
+uv run scripts/cli.py classify --limit 50                       # профили в pending_review
+uv run scripts/cli.py classify --limit 200 --workers 4
+uv run scripts/cli.py classify --limit 50 --source review_failed   # повтор неудачных
+uv run scripts/cli.py classify --limit 50 --source new          # профили из списка (new)
+uv run scripts/cli.py classify --limit 50 --recheck             # переклассифицировать reviewed
+uv run scripts/cli.py classify --stats                          # категории, время, расход запросов
+```
+
+Нужны `LLM_PROXY_URL`, `LLM_PROXY_API_KEY`, `LLM_MODEL` в `scripts/.env` (блок
+`--- LLM-классификация ---` в `.env.example`). `--limit` обязателен. Модель получает `og_title`,
+`og_description` и последние `LLM_SAMPLE_THREADS` веток профиля (посты под ветками не берутся) и
+отвечает JSON `{"category", "confidence", "reason"}`. Результат: `profiles.category_id`,
+`category_raw` (ответ, время, токены), `category_model`, `category_prompt_version`;
+`review_status` становится `reviewed` или `review_failed`. Переходы статуса проверяет триггер БД:
+`new -> pending_review -> reviewed | review_failed`, `reviewed -> pending_review` (`--recheck`),
+`review_failed -> pending_review` (повтор). Профиль берётся `FOR UPDATE SKIP LOCKED` и остаётся
+заблокированным до записи результата, поэтому воркеры и процессы не берут один профиль дважды.
+Ошибки proxy API (таймаут, 429, 5xx, невалидный ответ) дают `review_failed` и не останавливают
+запуск; 401/403 останавливают его целиком, профиль остаётся как был. Запуск пишется в `runs`
+(`kind='classify'`, итоги в `settings`).
 
 ### Разбор собранных веток: `--fill-threads` и выбор профилей `--source`
 

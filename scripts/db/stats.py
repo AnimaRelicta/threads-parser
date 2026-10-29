@@ -8,6 +8,8 @@ from dataclasses import dataclass
 
 import asyncpg
 
+from db.pool import run_sync
+
 
 @dataclass(frozen=True)
 class Report:
@@ -217,6 +219,68 @@ register(
 )
 
 
+# Классификация, отчёт 1: распределение профилей по категориям.
+register(
+    Report(
+        name="profiles_by_category",
+        title="Профили по категориям",
+        sql="""
+            SELECT coalesce(c.name_ru, '(без категории)') AS category,
+                   count(*) AS profiles,
+                   round(avg((p.category_raw->>'confidence')::numeric), 2) AS avg_confidence,
+                   count(*) FILTER (WHERE p.review_status = 'review_failed') AS failed
+            FROM profiles p
+            LEFT JOIN categories c ON c.id = p.category_id
+            WHERE p.review_status <> 'new' OR p.category_id IS NOT NULL
+            GROUP BY c.id, c.name_ru
+            ORDER BY count(*) DESC
+        """,
+        note="avg_confidence: средняя уверенность модели; failed: профилей в review_failed",
+    )
+)
+
+# Классификация, отчёт 2: среднее время классификации профиля по моделям.
+register(
+    Report(
+        name="classify_latency",
+        title="Классификация: время на профиль",
+        sql="""
+            SELECT coalesce(category_model, '-') AS model,
+                   count(*) AS profiles,
+                   round(avg((category_raw->>'latency_ms')::numeric)) AS avg_ms,
+                   round(avg((category_raw->>'requests')::numeric), 2) AS avg_requests
+            FROM profiles
+            WHERE category_raw->>'latency_ms' IS NOT NULL
+            GROUP BY category_model
+            ORDER BY count(*) DESC
+        """,
+        note="avg_ms: от первого запроса до ответа с учётом повторов; по последней попытке профиля",
+    )
+)
+
+# Классификация, отчёт 3: расход запросов к LLM по дням (итоги лежат в runs.settings).
+register(
+    Report(
+        name="classify_usage",
+        title="Классификация: расход запросов к LLM",
+        sql="""
+            SELECT to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+                   count(*) AS runs,
+                   sum(coalesce((settings->>'processed')::int, 0)) AS profiles,
+                   sum(coalesce((settings->>'requests')::int, 0)) AS requests,
+                   sum(coalesce((settings->>'prompt_tokens')::int, 0)) AS prompt_tokens,
+                   sum(coalesce((settings->>'completion_tokens')::int, 0)) AS completion_tokens
+            FROM runs
+            WHERE kind = 'classify'
+            GROUP BY 1
+            ORDER BY 1 DESC
+            LIMIT 14
+        """,
+        note="requests: HTTP-запросов к proxy API с повторами; токены, если proxy их возвращает",
+    )
+)
+
+
 async def run_report(conn: asyncpg.Connection, report: Report) -> tuple[list[str], list[tuple]]:
     """(названия колонок, строки); заголовки есть и у пустого результата."""
     stmt = await conn.prepare(report.sql)
@@ -232,3 +296,20 @@ def format_table(cols: list[str], rows: list[tuple]) -> str:
     lines = [fmt.format(*cols), fmt.format(*("-" * w for w in widths))]
     lines += [fmt.format(*row) for row in cells]
     return "\n".join(lines)
+
+
+def print_reports(st, names: list[str]) -> None:
+    """Печатает таблицы отчётов из БД по именам (для команд --stats)."""
+
+    async def _all(conn):
+        return [(name, *await run_report(conn, REPORTS[name])) for name in names]
+
+    for name, cols, rows in run_sync(st, _all):
+        report = REPORTS[name]
+        print(f"\n### {report.title}")
+        if not rows:
+            print("(нет данных)")
+            continue
+        print(format_table(cols, rows))
+        if report.note:
+            print(report.note)

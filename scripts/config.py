@@ -43,6 +43,15 @@ class Settings:
     search_workers: int = 3
     search_window_days: int = 0
 
+    # --- LLM-классификация профилей (scripts/classify/) ----------------------
+    llm_proxy_url: str | None = None  # LLM_PROXY_URL
+    llm_proxy_api_key: str | None = None  # LLM_PROXY_API_KEY (только в scripts/.env)
+    llm_model: str | None = None  # LLM_MODEL
+    llm_timeout_sec: int = 60
+    llm_max_retries: int = 3
+    llm_workers: int = 2
+    llm_sample_threads: int = 10  # сколько последних веток профиля идёт в контекст
+
     # Postgres и Proxy для поиска
     database_url: str | None = None  # DATABASE_URL (пароль только в scripts/.env, не в коде)
     proxy: str | None = None  # PROXY, например socks5://127.0.0.1:12334
@@ -129,6 +138,13 @@ def load_settings() -> Settings:
         search_output_dir=_path(get("SEARCH_OUTPUT_DIR"), ROOT / "output" / "search"),
         search_workers=max(1, _int(get("SEARCH_WORKERS"), 3)),
         search_window_days=max(0, _int(get("SEARCH_WINDOW_DAYS"), 0)),
+        llm_proxy_url=(get("LLM_PROXY_URL") or "").strip() or None,
+        llm_proxy_api_key=(get("LLM_PROXY_API_KEY") or "").strip() or None,
+        llm_model=(get("LLM_MODEL") or "").strip() or None,
+        llm_timeout_sec=max(1, _int(get("LLM_TIMEOUT_SEC"), 60)),
+        llm_max_retries=max(0, _int(get("LLM_MAX_RETRIES"), 3)),
+        llm_workers=max(1, _int(get("LLM_WORKERS"), 2)),
+        llm_sample_threads=max(1, _int(get("LLM_SAMPLE_THREADS"), 10)),
         database_url=(get("DATABASE_URL") or "").strip() or None,
         proxy=(get("PROXY") or "").strip() or None,
     )

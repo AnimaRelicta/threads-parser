@@ -17,7 +17,7 @@ from config import ENV_FILE, load_settings
 from core.timeutil import parse_since
 from db.discovery import Candidate, discover_authors, discover_tracked
 from db.pool import run_sync
-from db.stats import REPORTS, format_table, run_report
+from db.stats import print_reports
 
 # Отчёты по профилям, в порядке вывода --stats (сами отчёты — в db/stats.py).
 STATS_REPORTS = ["profiles_review_queue", "threads_quick", "discover_runs"]
@@ -60,23 +60,6 @@ def build_parser(st) -> argparse.ArgumentParser:
     return ap
 
 
-def print_stats(st) -> None:
-    """Таблицы отчётов из БД (см. STATS_REPORTS)."""
-
-    async def _all(conn):
-        return [(name, *await run_report(conn, REPORTS[name])) for name in STATS_REPORTS]
-
-    for name, cols, rows in run_sync(st, _all):
-        report = REPORTS[name]
-        print(f"\n### {report.title}")
-        if not rows:
-            print("(нет данных)")
-            continue
-        print(format_table(cols, rows))
-        if report.note:
-            print(report.note)
-
-
 def print_candidates(candidates: list[Candidate], show: int) -> None:
     shown = candidates if show <= 0 else candidates[:show]
     for c in shown:
@@ -91,7 +74,7 @@ def main() -> None:
     if args.min_mentions < 1:
         raise SystemExit("--min-mentions должен быть не меньше 1")
     if args.stats:
-        print_stats(st)
+        print_reports(st, STATS_REPORTS)
         return
     since = parse_since(args.since)
     if args.dry_run:  # пробный просмотр в runs не пишется

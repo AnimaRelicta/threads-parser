@@ -8,7 +8,7 @@ select = ["E", "F", "I", "W", "UP"]
 ignore = ["E501"]
 
 [lint.isort]
-known-first-party = ["config", "core", "db", "browser", "registry", "scrape", "serp"]
+known-first-party = ["config", "core", "db", "browser", "registry", "scrape", "serp", "classify"]
 
 [format]
 quote-style = "double"
