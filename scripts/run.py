@@ -5,6 +5,8 @@
     uv run scripts/run.py olx_vetka_astana --limit 5
     uv run scripts/run.py --since 1m --comments          # профили из data/threads_profiles.txt
     uv run scripts/run.py olx_vetka_astana --threads-only --since 7d   # только список веток
+    uv run scripts/run.py olx_vetka_astana --fill-threads --since 7d --comments   # разбор этих веток
+    uv run scripts/run.py --source new --threads-only --since 7d       # профили без веток
     uv run scripts/run.py --comments --depth 3 --accounts account_001,account_002 --workers 2
     uv run scripts/run.py --headless                      # на сервере, по готовым кукам
 """
@@ -31,6 +33,18 @@ def build_parser(st) -> argparse.ArgumentParser:
         action="store_true",
         help="быстрый сбор веток: пройти ленту профиля и сохранить ветки за период "
         "(текст, дата, счётчики) без открытия самих веток, комментариев и медиа",
+    )
+    ap.add_argument(
+        "--fill-threads",
+        action="store_true",
+        help="разобрать ветки, ранее собранные через --threads-only (открыть ветку, "
+        "текст, медиа, посты под веткой по --comments/--depth); обход ленты не делается",
+    )
+    ap.add_argument(
+        "--source",
+        help="откуда взять профили из БД: all (is_target), new (ещё без веток), "
+        "search, authors (после шага «поиск по авторам») или ники через запятую; "
+        "добавляется к профилю из командной строки и к --file",
     )
     ap.add_argument(
         "--accounts",
@@ -166,7 +180,9 @@ def main() -> None:
     args = build_parser(st).parse_args()
     if args.stop_after < 1:
         raise SystemExit("--stop-after должен быть не меньше 1")
-    if not args.username and not args.file:
+    if args.threads_only and args.fill_threads:
+        raise SystemExit("--threads-only и --fill-threads несовместимы: это два разных шага")
+    if not args.username and not args.file and not args.source:
         args.file = str(st.profiles_file)
     if args.threads_only:
         warn_ignored_flags(sys.argv[1:])

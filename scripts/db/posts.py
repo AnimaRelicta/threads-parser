@@ -395,6 +395,30 @@ ON CONFLICT (code) DO UPDATE SET
 """
 
 
+async def pending_threads(
+    conn: asyncpg.Connection, profile_id: int, cutoff: datetime | None, limit: int | None
+) -> list[dict]:
+    """Ветки профиля, собранные быстрым режимом и ещё не разобранные, за период (новые первыми).
+
+    Ветки из skipped_posts (видео при режиме «только фото») пропускаются: иначе их
+    открывали бы при каждом запуске.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT code, date_utc FROM posts p
+        WHERE p.profile_id = $1 AND p.last_refreshed_at IS NULL
+          AND ($2::timestamptz IS NULL OR p.date_utc IS NULL OR p.date_utc >= $2)
+          AND NOT EXISTS (SELECT 1 FROM skipped_posts s WHERE s.code = p.code)
+        ORDER BY p.date_utc DESC NULLS LAST, p.code
+        LIMIT $3
+        """,
+        profile_id,
+        cutoff,
+        limit,
+    )
+    return [{"code": r["code"], "date": r["date_utc"]} for r in rows]
+
+
 async def known_codes(conn: asyncpg.Connection, profile_id: int) -> set[str]:
     """Коды веток профиля, уже лежащих в posts (разобранных и собранных быстрым режимом)."""
     rows = await conn.fetch("SELECT code FROM posts WHERE profile_id = $1", profile_id)

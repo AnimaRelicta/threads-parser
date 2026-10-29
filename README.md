@@ -141,6 +141,7 @@ approved-постов и состояние очереди `search_jobs`. CSV н
 | `posts.py` | Сбор и обновление одного поста; читаемый captions.txt. | `comment_lines`, `write_captions`, `scrape_post`, `refresh_comments` … |
 | `anchor.py` | Якорь профиля (хранится в `profile_anchors`): метка самого нового поста для режима «только новое». | `DEFAULT_STOP_AFTER`, `anchor_covers`, `compute_anchor` |
 | `entry.py` | Вход в профиль: открытие ленты, проверки 404/429/логин, метаданные. Общий для `profile.py` и `threads.py`. | `open_profile` |
+| `fill.py` | Разбор веток, собранных быстрым режимом (`--fill-threads`): ветки берутся из БД, не из ленты. | `run_fill` |
 | `profile.py` | Обработка одного профиля (полный проход: ветки, посты под ветками, медиа). | `run_profile` |
 | `threads.py` | Быстрый сбор веток профиля за период только из ленты, без открытия веток (`--threads-only`). | `run_threads` |
 | `report.py` | Итоги запуска: счётчики, записи журнала, сводка. | `media_totals`, `profile_run_entry`, `print_summary` |
@@ -270,7 +271,7 @@ uv run scripts/run.py --accounts account_001,account_002 --workers 2 --since 1m 
 
 Флаги: `--file`, `--accounts`, `--workers`, `--since` (30d, 4w, 1m, 1y или дата), `--limit`,
 `--comments`, `--depth`, `--max-comments`, `--recheck-days`, `--full-rescan`, `--full`,
-`--stop-after`, `--threads-only`, `--with-videos`, `--no-block`, `--delay`, `--profile-delay`, `--headless`,
+`--stop-after`, `--threads-only`, `--fill-threads`, `--source`, `--with-videos`, `--no-block`, `--delay`, `--profile-delay`, `--headless`,
 `--debug`, `--output`. Справка: `uv run scripts/run.py -h`.
 
 ### Быстрый сбор веток: `--threads-only`
@@ -288,6 +289,26 @@ uv run scripts/run.py --threads-only --since 1m          # профили из d
 `--accounts`, `--workers`, `--delay`, `--headless`; флаги про содержимое ветки
 (`--comments`, `--depth`, `--with-videos` и т. п.) игнорируются с предупреждением.
 В `profile_runs` такой запуск пишется с `mode='threads'`; колонки `posts_*` в нём считают ветки.
+
+### Разбор собранных веток: `--fill-threads` и выбор профилей `--source`
+
+```bash
+uv run scripts/run.py olx_vetka_astana --fill-threads --since 7d --comments --depth 3
+uv run scripts/run.py --source new --threads-only --since 7d
+uv run scripts/run.py --source all --fill-threads --since 7d --limit 50
+```
+
+`--fill-threads` не листает ленту: берёт из `posts` ветки профиля с `last_refreshed_at IS NULL`
+за период (новые первыми, `--limit` = сколько веток на профиль) и разбирает каждую как полный
+проход (текст, медиа, посты под веткой по `--comments`/`--depth`). Разобранная ветка получает
+`last_refreshed_at`, поэтому повторный запуск её уже не открывает; видео-ветки при режиме
+«только фото» попадают в `skipped_posts` и тоже не повторяются. Закреплённость не
+проверяется, период применён при сборе. Якорь не пишется. Несовместим с `--threads-only`.
+
+`--source` берёт профили из БД и добавляет их к профилю из командной строки и к `--file`:
+`all` (все с `is_target`), `new` (профили, у которых ещё нет ни одной ветки), `ник1,ник2`.
+Значения `search` и `authors` появятся с шагом «поиск по авторам». Функция выбора —
+`list_targets()` в `db/profiles.py`.
 
 ### Настройки по умолчанию в `.env`
 
@@ -318,7 +339,7 @@ uv run scripts/run.py --threads-only --since 1m          # профили из d
 - `--full` игнорирует якорь и проходит всё окно. Он нужен, чтобы дочитать ответы под
   старыми постами за пределами серии, а `--full-rescan` про другое: перечитывает ответы
   уже известных комментариев.
-- В итогах и `summary.json` у профиля есть поле `mode`: `only_new`, `full` или `threads`.
+- В итогах и `summary.json` у профиля есть поле `mode`: `only_new`, `full`, `threads` или `fill`.
 
 Логика парсинга постов, дерево комментариев и дочитывание только новых ответов перенесены из
 исходного `threads_browser_parser.py` без изменений.

@@ -1,12 +1,75 @@
 """Хранилище профильного пайплайна поверх пула: одно обращение = одно соединение."""
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import asyncpg
 
+from core.consts import USERNAME_RE
+from core.fsio import normalize_username
 from db import posts as repo
 from db.runs import ensure_profile
+
+SOURCE_SQL = {
+    "all": "p.is_target",
+    "new": "p.is_target AND NOT EXISTS (SELECT 1 FROM posts t WHERE t.profile_id = p.id)",
+    "search": "p.is_target AND p.discovered_via = 'search'",
+    "authors": "p.is_target AND p.discovered_via = 'author'",
+}
+NEEDS_DISCOVERY = ("search", "authors")
+
+
+async def _has_column(conn: asyncpg.Connection, column: str) -> bool:
+    return bool(
+        await conn.fetchval(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'threads' AND table_name = 'profiles' AND column_name = $1",
+            column,
+        )
+    )
+
+
+def parse_source(value: str) -> tuple[str, list[str]]:
+    """('all'|'new'|'search'|'authors', []) или ('list', [ники]) для «ник1,ник2»."""
+    v = value.strip()
+    if v.lower() in SOURCE_SQL:
+        return v.lower(), []
+    names = []
+    for part in v.split(","):
+        name = normalize_username(part)
+        if not name or not USERNAME_RE.match(name):
+            raise SystemExit(
+                f"--source: «{part.strip()}» не ник и не одно из: {', '.join(SOURCE_SQL)}"
+            )
+        names.append(name)
+    return "list", names
+
+
+async def list_targets(
+    conn: asyncpg.Connection, source: str, review_status: str | None = None
+) -> list[str]:
+    """Ники профилей для запуска: all | new | search | authors | «ник1,ник2».
+
+    search и authors опираются на profiles.discovered_via, review_status на
+    profiles.review_status (миграция шага «поиск по авторам»); без неё понятная ошибка.
+    """
+    kind, names = parse_source(source)
+    if kind == "list":
+        return names
+    if (kind in NEEDS_DISCOVERY and not await _has_column(conn, "discovered_via")) or (
+        review_status and not await _has_column(conn, "review_status")
+    ):
+        raise SystemExit(
+            f"--source {kind}: в profiles нет discovered_via/review_status "
+            "(появляются на шаге «поиск по авторам»), пока доступны all, new и список ников"
+        )
+    where, args = SOURCE_SQL[kind], []
+    if review_status:
+        where += " AND p.review_status = $1"
+        args.append(review_status)
+    rows = await conn.fetch(f"SELECT p.username FROM profiles p WHERE {where} ORDER BY p.id", *args)
+    return [r["username"] for r in rows]
 
 
 @dataclass
@@ -62,6 +125,12 @@ class ProfileStore:
     async def known_codes(self, profile_id: int) -> set[str]:
         async with self.pool.acquire() as conn:
             return await repo.known_codes(conn, profile_id)
+
+    async def pending_threads(
+        self, profile_id: int, cutoff: datetime | None, limit: int | None
+    ) -> list[dict]:
+        async with self.pool.acquire() as conn:
+            return await repo.pending_threads(conn, profile_id, cutoff, limit)
 
     async def save_threads_light(self, profile_id: int, username: str, items: list[dict]) -> None:
         async with self.pool.acquire() as conn:

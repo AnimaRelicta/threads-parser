@@ -4,7 +4,11 @@ from datetime import datetime
 
 from core.logs import log
 
-MODE_LABELS = {"only_new": "только новое", "threads": "только список веток"}
+MODE_LABELS = {
+    "only_new": "только новое",
+    "threads": "только список веток",
+    "fill": "разбор собранных веток",
+}
 
 
 def media_totals(posts: list[dict]) -> dict:

@@ -20,11 +20,12 @@ from core.fsio import normalize_username, read_usernames
 from core.logs import PSTAT, TAG, log
 from core.timeutil import parse_since
 from db.pool import DB_ERRORS, create_pool, run_sync
-from db.profiles import ProfileStore
+from db.profiles import ProfileStore, list_targets
 from db.runs import finalize_run, start_run
 from registry.store import get_account, now_iso, pick_accounts
 from scrape.capture import make_handler
 from scrape.consts import BLOCKED_RESOURCES, UNLIMITED_DEPTH
+from scrape.fill import run_fill
 from scrape.profile import run_profile
 from scrape.report import print_summary, profile_run_entry
 from scrape.threads import run_threads
@@ -102,6 +103,7 @@ async def worker_main(
         if grid_page is None:
             grid_page = await acc.ctx.new_page()
         threads_only = bool(getattr(args, "threads_only", False))
+        fill = bool(getattr(args, "fill_threads", False))
         if not threads_only:  # быстрому сбору веток вторая вкладка не нужна
             post_page = await acc.ctx.new_page()  # лента профиля остаётся на месте
             post_page.on("response", make_handler(net.captured, net))
@@ -136,7 +138,9 @@ async def worker_main(
                 PSTAT.set(ps)
                 t0, started = time.monotonic(), now_iso()
                 try:
-                    if threads_only:
+                    if fill:
+                        res = await run_fill(acc, post_page, net, name, args, state.store)
+                    elif threads_only:
                         res = await run_threads(grid_page, net, name, args, state.store)
                     else:
                         res = await run_profile(
@@ -289,8 +293,15 @@ def run(args, st: Settings) -> None:
         for name in read_usernames(Path(args.file)):
             if name.lower() not in {u.lower() for u in usernames}:
                 usernames.append(name)
+    if getattr(args, "source", None):
+        have = {u.lower() for u in usernames}
+        for name in run_sync(st, lambda conn: list_targets(conn, args.source)):
+            if name.lower() not in have:
+                usernames.append(name)
+                have.add(name.lower())
+        log(f"[*] --source {args.source}: профилей в списке {len(usernames)}")
     if not usernames:
-        raise SystemExit("Укажите профиль или заполните файл со списком профилей")
+        raise SystemExit("Укажите профиль, --source или заполните файл со списком профилей")
     if args.depth == -1:
         args.depth = UNLIMITED_DEPTH
     elif args.depth < 1:
@@ -304,11 +315,14 @@ def run(args, st: Settings) -> None:
         f"воркеров на аккаунт: {m} (одновременно до {len(accounts) * m} профилей)"
     )
     threads_only = bool(getattr(args, "threads_only", False))
+    fill = bool(getattr(args, "fill_threads", False))
+    if fill:
+        log("[*] Режим --fill-threads: разбор веток, собранных ранее через --threads-only")
     if threads_only:
         log("[*] Режим --threads-only: только список веток из ленты, ветки не открываются")
     if args.cutoff:
         log(
-            f"[*] Берём {'ветки' if threads_only else 'посты'} "
+            f"[*] Берём {'ветки' if threads_only or fill else 'посты'} "
             f"не старше {args.cutoff:%Y-%m-%d %H:%M} UTC"
         )
     if getattr(args, "full", False):
@@ -334,7 +348,7 @@ def run(args, st: Settings) -> None:
         "full": bool(getattr(args, "full", False)),
         "with_videos": bool(args.with_videos),
         "headless": bool(args.headless),
-        "mode": "threads" if threads_only else "full",
+        "mode": "threads" if threads_only else "fill" if fill else "full",
     }
     run_id = run_sync(st, lambda conn: start_run(conn, "profiles", run_settings))
     interrupted = False
