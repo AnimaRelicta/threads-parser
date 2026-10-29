@@ -27,6 +27,7 @@ from scrape.capture import make_handler
 from scrape.consts import BLOCKED_RESOURCES, UNLIMITED_DEPTH
 from scrape.profile import run_profile
 from scrape.report import print_summary, profile_run_entry
+from scrape.threads import run_threads
 
 
 class Dispatcher:
@@ -100,10 +101,12 @@ async def worker_main(
             await asyncio.sleep(stagger)  # разносим старт воркеров
         if grid_page is None:
             grid_page = await acc.ctx.new_page()
-        post_page = await acc.ctx.new_page()  # вторая вкладка: лента профиля остаётся на месте
-        post_page.on("response", make_handler(net.captured, net))
+        threads_only = bool(getattr(args, "threads_only", False))
+        if not threads_only:  # быстрому сбору веток вторая вкладка не нужна
+            post_page = await acc.ctx.new_page()  # лента профиля остаётся на месте
+            post_page.on("response", make_handler(net.captured, net))
         grid_page.on("response", make_handler(net.grid_captured, net))
-        if not args.no_block:
+        if not threads_only and not args.no_block:
 
             async def block_heavy(route):
                 try:
@@ -133,7 +136,12 @@ async def worker_main(
                 PSTAT.set(ps)
                 t0, started = time.monotonic(), now_iso()
                 try:
-                    res = await run_profile(acc, grid_page, post_page, net, name, args, state.store)
+                    if threads_only:
+                        res = await run_threads(grid_page, net, name, args, state.store)
+                    else:
+                        res = await run_profile(
+                            acc, grid_page, post_page, net, name, args, state.store
+                        )
                 except (PlaywrightError, *DB_ERRORS) as e:
                     is_db = not isinstance(e, PlaywrightError)
                     log(f"[!] Ошибка {'БД' if is_db else 'браузера'}: {str(e)[:200]}")
@@ -295,11 +303,17 @@ def run(args, st: Settings) -> None:
         f"[*] Профилей: {len(usernames)} | аккаунтов: {len(accounts)} | "
         f"воркеров на аккаунт: {m} (одновременно до {len(accounts) * m} профилей)"
     )
+    threads_only = bool(getattr(args, "threads_only", False))
+    if threads_only:
+        log("[*] Режим --threads-only: только список веток из ленты, ветки не открываются")
     if args.cutoff:
-        log(f"[*] Берём посты не старше {args.cutoff:%Y-%m-%d %H:%M} UTC")
+        log(
+            f"[*] Берём {'ветки' if threads_only else 'посты'} "
+            f"не старше {args.cutoff:%Y-%m-%d %H:%M} UTC"
+        )
     if getattr(args, "full", False):
         log("[*] --full: якорь игнорируется, полный проход по окну")
-    if args.comments:
+    if args.comments and not threads_only:
         log(
             f"[*] Комментарии: глубина "
             f"{'без ограничения' if args.depth == UNLIMITED_DEPTH else args.depth}"
@@ -320,6 +334,7 @@ def run(args, st: Settings) -> None:
         "full": bool(getattr(args, "full", False)),
         "with_videos": bool(args.with_videos),
         "headless": bool(args.headless),
+        "mode": "threads" if threads_only else "full",
     }
     run_id = run_sync(st, lambda conn: start_run(conn, "profiles", run_settings))
     interrupted = False

@@ -53,3 +53,16 @@ class ProfileStore:
     async def save_anchor(self, profile_id: int, anchor: dict) -> None:
         async with self.pool.acquire() as conn:
             await repo.save_anchor(conn, profile_id, anchor)
+
+    async def ensure_profile(self, username: str) -> int:
+        """id профиля; заводит строку, если её нет (без чтения постов, в отличие от load)."""
+        async with self.pool.acquire() as conn:
+            return await ensure_profile(conn, username)
+
+    async def known_codes(self, profile_id: int) -> set[str]:
+        async with self.pool.acquire() as conn:
+            return await repo.known_codes(conn, profile_id)
+
+    async def save_threads_light(self, profile_id: int, username: str, items: list[dict]) -> None:
+        async with self.pool.acquire() as conn:
+            await repo.save_threads_light(conn, profile_id, username, items)

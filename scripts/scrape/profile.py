@@ -9,16 +9,14 @@ from playwright.async_api import Error as PlaywrightError
 
 from browser.account import Account
 from browser.net import Net
-from config import TH
 from core.errors import AuthProblem, OldPost, RateLimited, SkipPost, ThreadAborted
 from core.logs import log
 from core.timeutil import iso, parse_dt
 from db.profiles import ProfileStore
 from scrape.anchor import DEFAULT_STOP_AFTER, anchor_covers, compute_anchor
 from scrape.consts import OLD_STREAK_STOP, PINNED_LOOKAHEAD
-from scrape.extract import read_embedded
+from scrape.entry import open_profile
 from scrape.feed import Lookahead, iter_post_links
-from scrape.harvest import FeedIndex
 from scrape.posts import (
     needs_refresh,
     refresh_comments,
@@ -64,34 +62,10 @@ async def run_profile(
 
     skipped = state.skipped
 
-    net.grid_captured.clear()
-    resp = await grid_page.goto(f"{TH}/@{username}", wait_until="domcontentloaded")
-    await grid_page.wait_for_timeout(3000)
-    if "/login" in grid_page.url:
-        result.update(
-            status="abort", abort_kind="auth", note="сессия недействительна: accounts.py relogin"
-        )
+    feed, fail = await open_profile(grid_page, net, username, pid, store)
+    if fail:
+        result.update(fail)
         return result
-    if resp is not None and resp.status == 404:
-        result.update(status="not_found", note="профиль не найден")
-        return result
-    if resp is not None and resp.status == 429:
-        result.update(status="abort", abort_kind="429", note="429 Too Many Requests")
-        return result
-
-    feed = FeedIndex()
-    feed.feed(await read_embedded(grid_page))
-    feed.update(net.grid_captured)
-
-    meta = await grid_page.evaluate("""() => ({
-        title: document.title,
-        og_title: document.querySelector('meta[property="og:title"]')?.content || null,
-        og_description: document.querySelector('meta[property="og:description"]')?.content || null,
-        og_image: document.querySelector('meta[property="og:image"]')?.content || null
-    })""")
-    meta.update({"username": username, "url": f"{TH}/@{username}"})
-    await store.save_meta(pid, meta)
-    log(f"[+] {meta.get('og_title') or meta.get('title')}")
 
     # Якорь: после первого прохода по окну лежит в profile_anchors; дальше обход
     # останавливается после N подряд известных постов (--full его игнорирует)

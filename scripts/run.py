@@ -4,11 +4,13 @@
 Примеры (из корня проекта):
     uv run scripts/run.py olx_vetka_astana --limit 5
     uv run scripts/run.py --since 1m --comments          # профили из data/threads_profiles.txt
+    uv run scripts/run.py olx_vetka_astana --threads-only --since 7d   # только список веток
     uv run scripts/run.py --comments --depth 3 --accounts account_001,account_002 --workers 2
     uv run scripts/run.py --headless                      # на сервере, по готовым кукам
 """
 
 import argparse
+import sys
 
 from config import ENV_FILE, load_settings
 from scrape.dispatch import run
@@ -23,6 +25,12 @@ def build_parser(st) -> argparse.ArgumentParser:
         "--file",
         help="файл со списком профилей (по умолчанию PROFILES_FILE, "
         "если профиль не указан в командной строке)",
+    )
+    ap.add_argument(
+        "--threads-only",
+        action="store_true",
+        help="быстрый сбор веток: пройти ленту профиля и сохранить ветки за период "
+        "(текст, дата, счётчики) без открытия самих веток, комментариев и медиа",
     )
     ap.add_argument(
         "--accounts",
@@ -132,6 +140,27 @@ def build_parser(st) -> argparse.ArgumentParser:
     return ap
 
 
+# Флаги про содержимое ветки: в режиме --threads-only не используются
+THREADS_ONLY_IGNORED = (
+    "--comments",
+    "--no-comments",
+    "--depth",
+    "--max-comments",
+    "--with-videos",
+    "--no-with-videos",
+    "--recheck-days",
+    "--full-rescan",
+    "--no-block",
+)
+
+
+def warn_ignored_flags(argv: list[str]) -> None:
+    """Предупреждает о явно переданных флагах, которые --threads-only игнорирует."""
+    used = [f for f in THREADS_ONLY_IGNORED if any(a == f or a.startswith(f + "=") for a in argv)]
+    if used:
+        print(f"[!] --threads-only: флаги игнорируются: {', '.join(used)}")
+
+
 def main() -> None:
     st = load_settings()
     args = build_parser(st).parse_args()
@@ -139,6 +168,8 @@ def main() -> None:
         raise SystemExit("--stop-after должен быть не меньше 1")
     if not args.username and not args.file:
         args.file = str(st.profiles_file)
+    if args.threads_only:
+        warn_ignored_flags(sys.argv[1:])
     run(args, st)
 
 

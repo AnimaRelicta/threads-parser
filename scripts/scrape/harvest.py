@@ -1,7 +1,7 @@
 """Накопление постов из ответов сервера: пул, индекс ленты, выбор дочерних узлов."""
 
 from core.jsonwalk import walk, walk_ordered
-from scrape.extract import caption_of, is_video_obj, media_urls
+from scrape.extract import caption_of, is_video_obj, media_urls, topic_of
 
 
 class Harvester:
@@ -34,11 +34,14 @@ class Harvester:
         self._n = n
 
 
-class FeedIndex:
-    """Данные постов из JSON самой ленты профиля: дата, число ответов, видео.
+THREAD_KEYS = ("text", "likes", "reposts", "quotes", "author_id", "topic")
 
-    Позволяет отсеять старые посты и видео, а также понять, появились ли
-    новые ответы, без открытия страницы поста.
+
+class FeedIndex:
+    """Данные веток из JSON самой ленты профиля: дата, число ответов, видео, текст, счётчики.
+
+    Позволяет отсеять старые ветки и видео, понять, появились ли новые ответы,
+    и собрать список веток без открытия страницы ветки.
     """
 
     def __init__(self):
@@ -52,11 +55,25 @@ class FeedIndex:
             if not code or ts is None:
                 continue
             info = d.get("text_post_app_info") or {}
-            self.items[code] = {
+            user = d.get("user") if isinstance(d.get("user"), dict) else {}
+            item = {
                 "ts": ts,
                 "replies": info.get("direct_reply_count"),
                 "video": is_video_obj(d),
+                # поля для быстрого сбора веток (--threads-only), без открытия ветки
+                "text": caption_of(d),
+                "likes": d.get("like_count"),
+                "reposts": info.get("repost_count"),
+                "quotes": info.get("quote_count"),
+                "author_id": str(user["pk"]) if user.get("pk") is not None else None,
+                "topic": topic_of(d),
             }
+            prev = self.items.get(code)
+            if prev:  # неполный повторный объект не стирает уже известные новые поля
+                for k in THREAD_KEYS:
+                    if item[k] is None:
+                        item[k] = prev.get(k)
+            self.items[code] = item
 
     def feed(self, docs: list) -> None:
         for doc in docs:

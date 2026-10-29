@@ -10,8 +10,8 @@ from pathlib import Path
 import asyncpg
 
 from config import TH
-from core.textfilter import FILTER_VERSION, classify
-from core.timeutil import parse_dt
+from core.textfilter import FILTER_VERSION, classify, hashtags_mentions
+from core.timeutil import iso, parse_dt
 
 MEDIA_SUBDIR = "media"
 
@@ -355,3 +355,91 @@ async def save_meta(conn: asyncpg.Connection, profile_id: int, meta: dict) -> No
         meta.get("og_description"),
         meta.get("og_image"),
     )
+
+
+def _keep_full(col: str) -> str:
+    """Поле обновляется быстрым сбором, только пока ветка не разобрана полностью."""
+    return (
+        f"CASE WHEN posts.last_refreshed_at IS NULL "
+        f"THEN coalesce(EXCLUDED.{col}, posts.{col}) ELSE posts.{col} END"
+    )
+
+
+_FILTER_OPEN = "posts.last_refreshed_at IS NULL AND EXCLUDED.text IS NOT NULL"
+
+THREAD_LIGHT_SQL = f"""
+INSERT INTO posts (
+    code, url, author_username, author_user_id, profile_id, text, topic_id, date_utc,
+    likes, reply_count, reposts, quotes, hashtags, mentions,
+    filter_status, filter_matched, filter_matched_in, filter_version, first_seen_via)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'profile')
+ON CONFLICT (code) DO UPDATE SET
+    profile_id = coalesce(posts.profile_id, EXCLUDED.profile_id),
+    author_user_id = coalesce(posts.author_user_id, EXCLUDED.author_user_id),
+    url = {_keep_full("url")},
+    text = {_keep_full("text")},
+    topic_id = {_keep_full("topic_id")},
+    date_utc = {_keep_full("date_utc")},
+    hashtags = CASE WHEN {_FILTER_OPEN} THEN EXCLUDED.hashtags ELSE posts.hashtags END,
+    mentions = CASE WHEN {_FILTER_OPEN} THEN EXCLUDED.mentions ELSE posts.mentions END,
+    filter_status = CASE WHEN {_FILTER_OPEN} THEN EXCLUDED.filter_status ELSE posts.filter_status END,
+    filter_matched = CASE WHEN {_FILTER_OPEN} THEN EXCLUDED.filter_matched ELSE posts.filter_matched END,
+    filter_matched_in = CASE WHEN {_FILTER_OPEN}
+        THEN EXCLUDED.filter_matched_in ELSE posts.filter_matched_in END,
+    filter_version = CASE WHEN {_FILTER_OPEN} THEN EXCLUDED.filter_version ELSE posts.filter_version END,
+    likes = coalesce(EXCLUDED.likes, posts.likes),
+    reply_count = coalesce(EXCLUDED.reply_count, posts.reply_count),
+    reposts = coalesce(EXCLUDED.reposts, posts.reposts),
+    quotes = coalesce(EXCLUDED.quotes, posts.quotes),
+    updated_at = now()
+"""
+
+
+async def known_codes(conn: asyncpg.Connection, profile_id: int) -> set[str]:
+    """Коды веток профиля, уже лежащих в posts (разобранных и собранных быстрым режимом)."""
+    rows = await conn.fetch("SELECT code FROM posts WHERE profile_id = $1", profile_id)
+    return {r["code"] for r in rows}
+
+
+async def save_threads_light(
+    conn: asyncpg.Connection, profile_id: int, username: str, items: list[dict]
+) -> None:
+    """Быстрый сбор веток: запись данных из ленты без постов под веткой и медиа.
+
+    Новая ветка получает last_refreshed_at = NULL (признак «ещё не разобрана»). У уже
+    разобранной ветки обновляются только счётчики: текст, дата, комментарии, медиа
+    остаются как были. Фильтр «олх» считается по тексту, как при полном сохранении.
+    """
+    rows = []
+    async with conn.transaction():
+        topic_ids: dict[str, int] = {}
+        for it in items:
+            topic = it.get("topic")
+            if topic and topic not in topic_ids:
+                topic_ids[topic] = await upsert_topic(conn, topic)
+            text = it.get("text")
+            f_status, f_matched, f_in = classify(text, topic)
+            tags, mentions = hashtags_mentions(text)
+            rows.append(
+                (
+                    it["code"],
+                    f"{TH}/@{username}/post/{it['code']}",
+                    username,
+                    it.get("author_id"),
+                    profile_id,
+                    text,
+                    topic_ids.get(topic) if topic else None,
+                    parse_dt(iso(it.get("ts"))),
+                    it.get("likes"),
+                    it.get("replies"),
+                    it.get("reposts"),
+                    it.get("quotes"),
+                    tags,
+                    mentions,
+                    f_status,
+                    f_matched,
+                    f_in,
+                    FILTER_VERSION,
+                )
+            )
+        await conn.executemany(THREAD_LIGHT_SQL, rows)
