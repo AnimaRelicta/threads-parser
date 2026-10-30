@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from core.followers import _to_int
+from core.instagram import RESERVED_PATHS
 
 # «38 621 недавних просмотров», «1,2 тыс. недавних просмотров», «12K recent views»
 _VIEWS = re.compile(
@@ -45,7 +46,8 @@ def classify_link(url: str) -> dict:
     host = (u.hostname or "").lower().removeprefix("www.")
     first = next((p for p in u.path.split("/") if p), "")
     if host in ("instagram.com", "instagr.am"):
-        return {"kind": "instagram", "handle": first or None}
+        handle = None if first.lower() in RESERVED_PATHS else first or None
+        return {"kind": "instagram", "handle": handle}
     if host in ("t.me", "telegram.me"):
         return {"kind": "telegram", "handle": first.lstrip("@") or None}
     if host in ("wa.me", "api.whatsapp.com", "whatsapp.com"):

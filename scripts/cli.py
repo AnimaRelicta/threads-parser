@@ -22,6 +22,7 @@ COMMANDS = {
     "parse": ("run", "парсинг профилей: посты, медиа, комментарии (run.py)"),
     "search": ("search", "поиск по Threads: посты по запросам (search.py)"),
     "discover": ("discover", "новые профили по авторам постов и веток (discover.py)"),
+    "instagram": ("instagram", "связь Threads ↔ Instagram: stats, list, --csv (instagram.py)"),
     "spam": ("spam", "спам-профили: проверка по БД, список банов, разбан (spam.py)"),
     "classify": ("classify.cli", "категории профилей через LLM (classify/cli.py)"),
     "accounts": ("accounts", "аккаунты: add, list, relogin, check, export, import (accounts.py)"),

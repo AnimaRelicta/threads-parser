@@ -153,6 +153,7 @@ approved-постов и состояние очереди `search_jobs`. CSV н
 | `entry.py` | Вход в профиль: открытие ленты, проверки 404/429/логин, метаданные. Общий для `profile.py` и `threads.py`. | `open_profile` |
 | `about.py` | Окно «···» → «Об этом профиле»: имя, дата регистрации, местоположение (один раз на профиль, `profiles.about_*`, миграция 009). | `fetch_about` |
 | `header.py` | Шапка профиля из DOM без кликов: темы (чипы), ссылки в био (Telegram, WhatsApp, Instagram), «недавние просмотры» (`profiles.topics/links/recent_views`, миграция 010). | `read_header` |
+| `instagram.py` | Связь профиля с Instagram при открытии: ссылка в шапке > JSON страницы > био > догадка по нику (`instagram_links`, догадка помечена `guessed`). | `resolve_instagram` |
 | `fill.py` | Разбор веток, собранных быстрым режимом (`--fill-threads`): ветки берутся из БД, не из ленты. | `run_fill` |
 | `profile.py` | Обработка одного профиля (полный проход: ветки, посты под ветками, медиа). | `run_profile` |
 | `threads.py` | Быстрый сбор веток профиля за период только из ленты, без открытия веток (`--threads-only`). | `run_threads` |
@@ -436,3 +437,7 @@ uv run scripts/run.py --source authors --threads-only --since 7d   # собра�
 
 Автоматизация нарушает условия использования Threads/Meta: используйте паузы и небольшие
 объёмы.
+
+## Instagram: отчёт
+
+`uv run scripts/cli.py instagram stats` (сколько профилей со связью, по источникам) и `instagram list [--source ...] [--confidence guessed] [--csv файл]` (`scripts/instagram.py`).

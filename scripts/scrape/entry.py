@@ -13,6 +13,7 @@ from scrape.about import fetch_about
 from scrape.extract import read_embedded
 from scrape.harvest import FeedIndex
 from scrape.header import read_header
+from scrape.instagram import resolve_instagram
 
 META_JS = """() => ({
     title: document.title,
@@ -94,9 +95,13 @@ async def open_profile(
         )
     else:
         header_note = "шапка пустая"
+    # Instagram: шапка > JSON страницы > био > догадка по нику (догадка помечена guessed)
+    ig = await resolve_instagram(grid_page, header, meta.get("bio"), username)
+    await store.save_instagram(profile_id, ig)
     log(
         f"[+] {meta.get('og_title') or meta.get('title')}"
         f" | подписчиков: {meta['followers'] if meta['followers'] is not None else '?'}"
         f" | об аккаунте: {about_note} | {header_note}"
+        f" | instagram: @{ig.username} ({ig.source}{'?' if ig.confidence == 'guessed' else ''})"
     )
     return feed, None

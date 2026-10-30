@@ -10,6 +10,7 @@ from pathlib import Path
 import asyncpg
 
 from config import TH
+from core.instagram import DETECTOR_VERSION
 from core.textfilter import FILTER_VERSION, classify, hashtags_mentions
 from core.timeutil import iso, parse_dt
 
@@ -378,7 +379,7 @@ async def save_about(conn: asyncpg.Connection, profile_id: int, about) -> None:
 
 
 async def save_header(conn: asyncpg.Connection, profile_id: int, header) -> None:
-    """Шапка профиля (core.header.Header): просмотры, темы, ссылки; Instagram-ссылка -> instagram_links."""
+    """Шапка профиля (core.header.Header): просмотры, темы, ссылки."""
     await conn.execute(
         """
         UPDATE profiles SET recent_views = coalesce($2, recent_views),
@@ -390,22 +391,34 @@ async def save_header(conn: asyncpg.Connection, profile_id: int, header) -> None
         header.topics,
         header.links,
     )
-    ig = header.instagram
-    if ig:
-        await conn.execute(
-            """
-            INSERT INTO instagram_links
-                (profile_id, instagram_username, source, confidence, matched_raw)
-            VALUES ($1, $2, 'header_link', 'confirmed', $3)
-            ON CONFLICT (profile_id) DO UPDATE SET
-                instagram_username = EXCLUDED.instagram_username, source = EXCLUDED.source,
-                confidence = EXCLUDED.confidence, matched_raw = EXCLUDED.matched_raw,
-                updated_at = now()
-            """,
-            profile_id,
-            ig["handle"],
-            ig["url"],
-        )
+
+
+# Приоритет источников: ссылка в шапке > JSON страницы > догадка по нику. Слабый источник
+# не затирает более сильный (догадка не перезаписывает подтверждённую связь).
+_IG_RANK = "CASE {} WHEN 'header_link' THEN 3 WHEN 'threads_json' THEN 2 ELSE 1 END"
+SAVE_INSTAGRAM_SQL = f"""
+INSERT INTO instagram_links
+    (profile_id, instagram_username, source, confidence, matched_raw, detector_version)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (profile_id) DO UPDATE SET
+    instagram_username = EXCLUDED.instagram_username, source = EXCLUDED.source,
+    confidence = EXCLUDED.confidence, matched_raw = EXCLUDED.matched_raw,
+    detector_version = EXCLUDED.detector_version, updated_at = now()
+WHERE {_IG_RANK.format("EXCLUDED.source")} >= {_IG_RANK.format("instagram_links.source")}
+"""
+
+
+async def save_instagram(conn: asyncpg.Connection, profile_id: int, link) -> None:
+    """Связь профиля с Instagram (core.instagram.IgLink); слабый источник сильный не затирает."""
+    await conn.execute(
+        SAVE_INSTAGRAM_SQL,
+        profile_id,
+        link.username,
+        link.source,
+        link.confidence,
+        link.matched_raw,
+        DETECTOR_VERSION,
+    )
 
 
 async def about_fetched(conn: asyncpg.Connection, profile_id: int) -> bool:
