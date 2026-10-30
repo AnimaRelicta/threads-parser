@@ -12,6 +12,7 @@ from db.profiles import ProfileStore
 from scrape.about import fetch_about
 from scrape.extract import read_embedded
 from scrape.harvest import FeedIndex
+from scrape.header import read_header
 
 META_JS = """() => ({
     title: document.title,
@@ -83,9 +84,19 @@ async def open_profile(
             about_note = f"собран, место: {about.location or 'не указано'}"
         else:
             about_note = "НЕ удалось собрать"
+    # Шапка: темы, ссылки в био, недавние просмотры (без кликов, при каждом заходе: просмотры меняются)
+    header = await read_header(grid_page)
+    if header:
+        await store.save_header(profile_id, header)
+        header_note = (
+            f"просмотров: {header.recent_views if header.recent_views is not None else '?'}, "
+            f"тем: {len(header.topics)}, ссылок: {len(header.links)}"
+        )
+    else:
+        header_note = "шапка пустая"
     log(
         f"[+] {meta.get('og_title') or meta.get('title')}"
         f" | подписчиков: {meta['followers'] if meta['followers'] is not None else '?'}"
-        f" | об аккаунте: {about_note}"
+        f" | об аккаунте: {about_note} | {header_note}"
     )
     return feed, None

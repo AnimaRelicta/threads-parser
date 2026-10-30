@@ -377,6 +377,37 @@ async def save_about(conn: asyncpg.Connection, profile_id: int, about) -> None:
     )
 
 
+async def save_header(conn: asyncpg.Connection, profile_id: int, header) -> None:
+    """Шапка профиля (core.header.Header): просмотры, темы, ссылки; Instagram-ссылка -> instagram_links."""
+    await conn.execute(
+        """
+        UPDATE profiles SET recent_views = coalesce($2, recent_views),
+            topics = $3, links = $4, header_fetched_at = now()
+        WHERE id = $1
+        """,
+        profile_id,
+        header.recent_views,
+        header.topics,
+        header.links,
+    )
+    ig = header.instagram
+    if ig:
+        await conn.execute(
+            """
+            INSERT INTO instagram_links
+                (profile_id, instagram_username, source, confidence, matched_raw)
+            VALUES ($1, $2, 'header_link', 'confirmed', $3)
+            ON CONFLICT (profile_id) DO UPDATE SET
+                instagram_username = EXCLUDED.instagram_username, source = EXCLUDED.source,
+                confidence = EXCLUDED.confidence, matched_raw = EXCLUDED.matched_raw,
+                updated_at = now()
+            """,
+            profile_id,
+            ig["handle"],
+            ig["url"],
+        )
+
+
 async def about_fetched(conn: asyncpg.Connection, profile_id: int) -> bool:
     """True, если окно «Об этом профиле» этого профиля уже прочитано."""
     return bool(

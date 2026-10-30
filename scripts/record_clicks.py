@@ -4,6 +4,9 @@
     uv run scripts/record_clicks.py account_002 [--url https://www.threads.com/@by_kvartiraminsk]
 
 Дальше всё делаете руками в открывшемся окне (профиль -> «···» -> «Об этом профиле»).
+Тексты, на которые не нажимают (тема поста, ссылка в посте, «недавние просмотры»), помечайте:
+внизу слева панель с меткой (тема / ссылка / просмотры / другое), выберите её и сделайте
+Alt+клик по нужному тексту. Клик при этом не срабатывает, элемент подсветится рамкой.
 Каждый клик печатается в консоль и пишется в data/recordings/<время>.jsonl и .md:
 цепочка элементов от нажатого вверх (тег, role, aria-label, title у svg, текст, data-testid),
 готовый селектор Playwright и кусок HTML. Закончили: закройте окно браузера или Ctrl+C.
@@ -56,8 +59,49 @@ INIT_JS = r"""
   };
   const send = (kind, extra) => window.__recSend && window.__recSend(JSON.stringify(
     Object.assign({kind, url: location.href, t: Date.now()}, extra)));
+  window.__label = 'тема';
+  const LABELS = ['тема', 'ссылка', 'просмотры', 'другое'];
+  const paint = p => p.querySelectorAll('button').forEach(b => {
+    b.style.background = b.dataset.l === window.__label ? '#2d6cdf' : '#444'; });
+  const ensurePanel = () => {
+    if (window.top !== window || !document.body || document.getElementById('__rec_panel')) return;
+    const p = document.createElement('div'); p.id = '__rec_panel';
+    p.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:2147483647;background:#111;' +
+      'color:#fff;font:12px sans-serif;padding:6px;border-radius:8px;opacity:.93';
+    p.innerHTML = '<div style="margin-bottom:4px">Alt+клик по элементу = пометить как:</div>';
+    for (const l of LABELS) {
+      const b = document.createElement('button'); b.textContent = l; b.dataset.l = l;
+      b.style.cssText = 'color:#fff;border:0;border-radius:4px;padding:3px 8px;margin-right:4px;cursor:pointer';
+      b.onclick = ev => { ev.stopPropagation(); window.__label = l; paint(p); };
+      p.appendChild(b);
+    }
+    document.body.appendChild(p); paint(p);
+  };
+  setInterval(ensurePanel, 1000);
+  window.addEventListener('click', e => {
+    if (!e.altKey) return;
+    const el = e.target; if (!el || !el.tagName || el.closest('#__rec_panel')) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    let box = el;
+    for (let i = 0; i < 12 && box.parentElement; i++) {
+      box = box.parentElement; if (box.querySelector('a[href*="/post/"]')) break;
+    }
+    const links = [...new Set([...box.querySelectorAll('a[href]')].map(a => a.href))].slice(0, 20);
+    const chain = [];
+    for (let x = el; x && x.nodeType === 1 && chain.length < 7; x = x.parentElement)
+      chain.push(describe(x));
+    const a = el.closest('a');
+    send('pick', {
+      label: window.__label, text: clean(el.innerText || el.textContent), href: a ? a.href : null,
+      chain, css: css(el), html: el.outerHTML.slice(0, 600),
+      box_css: css(box), box_text: (box.innerText || '').replace(/\s+/g, ' ').slice(0, 600),
+      box_links: links, box_html: box.outerHTML.slice(0, 1500),
+    });
+    const old = el.style.outline; el.style.outline = '3px solid #2d6cdf';
+    setTimeout(() => { el.style.outline = old; }, 700);
+  }, true);
   const onClick = e => {
-    const el = e.target; if (!el || !el.tagName) return;
+    const el = e.target; if (!el || !el.tagName || el.closest('#__rec_panel')) return;
     const chain = [];
     for (let x = el; x && x.nodeType === 1 && chain.length < 7; x = x.parentElement)
       chain.push(describe(x));
@@ -116,7 +160,21 @@ async def main() -> None:
         ev = json.loads(raw)
         jl.write(json.dumps(ev, ensure_ascii=False) + "\n")
         jl.flush()
-        if ev["kind"] == "key":
+        if ev["kind"] == "pick":
+            n += 1
+            print(
+                f"[{n}] ПОМЕТКА «{ev['label']}» | текст: {ev['text'][:60]!r} | href: {ev['href']}\n"
+                f"      css: {ev['css']}\n      ссылок в карточке: {len(ev['box_links'])}"
+            )
+            md.write(
+                f"## Пометка {n}: {ev['label']}\n- страница: {ev['url']}\n"
+                f"- текст элемента: {ev['text']!r}\n- href: {ev['href']}\n"
+                f"- css: `{ev['css']}`\n- карточка (css): `{ev['box_css']}`\n"
+                f"- текст карточки: {ev['box_text']!r}\n"
+                f"- ссылки карточки: {ev['box_links']}\n"
+                f"```html\n{ev['html']}\n```\nКарточка:\n```html\n{ev['box_html']}\n```\n\n"
+            )
+        elif ev["kind"] == "key":
             line = f"- клавиша **{ev['key']}**"
             md.write(line + "\n")
             print(f"    [клавиша] {ev['key']}")
@@ -148,7 +206,8 @@ async def main() -> None:
         page = await ctx.new_page()
         await page.goto(args.url, wait_until="domcontentloaded")
         print(
-            f"[*] Запись пошла. Нажимайте как обычно; закройте окно браузера, чтобы закончить.\n"
+            f"[*] Запись пошла. Нажимайте как обычно, тексты помечайте Alt+клик (панель слева внизу);\n"
+            f"    закройте окно браузера, чтобы закончить.\n"
             f"    Файлы: {out}/{stamp}.md и .jsonl"
         )
         closed = asyncio.Event()

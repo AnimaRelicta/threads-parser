@@ -119,6 +119,10 @@ class ProfileStore:
         async with self.pool.acquire() as conn:
             await repo.save_about(conn, profile_id, about)
 
+    async def save_header(self, profile_id: int, header) -> None:
+        async with self.pool.acquire() as conn:
+            await repo.save_header(conn, profile_id, header)
+
     async def about_fetched(self, profile_id: int) -> bool:
         async with self.pool.acquire() as conn:
             return await repo.about_fetched(conn, profile_id)
