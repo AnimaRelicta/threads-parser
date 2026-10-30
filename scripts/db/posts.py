@@ -346,7 +346,8 @@ async def save_meta(conn: asyncpg.Connection, profile_id: int, meta: dict) -> No
         UPDATE profiles SET
             url = coalesce($2, url), title = $3, og_title = $4,
             og_description = $5, og_image = $6,
-            followers_count = coalesce($7, followers_count)
+            followers_count = coalesce($7, followers_count),
+            bio = coalesce($8, bio)
         WHERE id = $1
         """,
         profile_id,
@@ -356,6 +357,7 @@ async def save_meta(conn: asyncpg.Connection, profile_id: int, meta: dict) -> No
         meta.get("og_description"),
         meta.get("og_image"),
         meta.get("followers"),
+        meta.get("bio"),
     )
 
 

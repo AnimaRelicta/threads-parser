@@ -5,6 +5,7 @@
 
 from browser.net import Net
 from config import TH
+from core.biography import biography_from_json
 from core.followers import followers_from_json, followers_from_og
 from core.logs import log
 from db.profiles import ProfileStore
@@ -57,9 +58,21 @@ async def open_profile(
             meta["followers"] = followers_from_json(scripts, username)
         except Exception:
             pass
+
+    meta["bio"] = None
+    try:
+        bio_scripts = await grid_page.eval_on_selector_all(
+            'script[type="application/json"]',
+            "els => els.map(e => e.textContent).filter(t => t && t.includes('biography'))",
+        )
+        meta["bio"] = biography_from_json(bio_scripts, username)
+    except Exception:
+        pass
+
     await store.save_meta(profile_id, meta)
     log(
         f"[+] {meta.get('og_title') or meta.get('title')}"
         f" | подписчиков: {meta['followers'] if meta['followers'] is not None else '?'}"
+        f" | био: {'есть (' + str(len(meta['bio'])) + ' симв.)' if meta['bio'] else 'не нашли'}"
     )
     return feed, None
