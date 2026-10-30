@@ -5,6 +5,7 @@
     uv run scripts/cli.py parse olx_vetka_astana --limit 5 --comments
     uv run scripts/cli.py search "олх ветка астана" --since 7d
     uv run scripts/cli.py discover --since 7d --dry-run   # новые профили по авторам
+    uv run scripts/cli.py geo stats               # где находятся профили (КЗ/УЗ)
     uv run scripts/cli.py spam --check            # найти спам-профили (без --apply не банит)
     uv run scripts/cli.py classify --limit 50      # категории профилей через LLM
     uv run scripts/cli.py accounts check --headless
@@ -23,6 +24,7 @@ COMMANDS = {
     "search": ("search", "поиск по Threads: посты по запросам (search.py)"),
     "discover": ("discover", "новые профили по авторам постов и веток (discover.py)"),
     "instagram": ("instagram", "связь Threads ↔ Instagram: stats, list, --csv (instagram.py)"),
+    "geo": ("geo", "страна/город профилей (КЗ, УЗ): rescan, stats, list (geo.py)"),
     "spam": ("spam", "спам-профили: проверка по БД, список банов, разбан (spam.py)"),
     "classify": ("classify.cli", "категории профилей через LLM (classify/cli.py)"),
     "accounts": ("accounts", "аккаунты: add, list, relogin, check, export, import (accounts.py)"),

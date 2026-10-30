@@ -11,8 +11,10 @@ import asyncpg
 
 from config import TH
 from core.instagram import DETECTOR_VERSION
+from core.logs import log
 from core.textfilter import FILTER_VERSION, classify, hashtags_mentions
 from core.timeutil import iso, parse_dt
+from db.geo import save_post_mentions
 
 MEDIA_SUBDIR = "media"
 
@@ -176,6 +178,11 @@ async def save_post(
             f_in,
             FILTER_VERSION,
         )
+        try:  # города в тексте ветки; сбой детектора не должен ронять сохранение поста
+            async with conn.transaction():  # savepoint: ошибка откатит только упоминания
+                await save_post_mentions(conn, profile_id, code, post.get("text"))
+        except Exception as e:
+            log(f"[!] геолокации поста {code}: {e!r}")
         if comments:
             await conn.executemany(
                 COMMENT_SQL,

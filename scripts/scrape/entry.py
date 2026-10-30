@@ -98,10 +98,23 @@ async def open_profile(
     # Instagram: шапка > JSON страницы > био > догадка по нику (догадка помечена guessed)
     ig = await resolve_instagram(grid_page, header, meta.get("bio"), username)
     await store.save_instagram(profile_id, ig)
+    # Страна/город: about_location > телефон WhatsApp > био/имя/темы. Только по уже собранному,
+    # без запросов к Threads; сбой не должен ронять обход профиля.
+    try:
+        geo = await store.save_geo(profile_id)
+        geo_note = (
+            f"{geo.country}{' ' + geo.city if geo.city else ''} ({geo.source})"
+            f"{' КОНФЛИКТ' if geo.conflict else ''}"
+            if geo.country
+            else "нет данных"
+        )
+    except Exception as e:
+        geo_note = f"ошибка: {e!r}"
     log(
         f"[+] {meta.get('og_title') or meta.get('title')}"
         f" | подписчиков: {meta['followers'] if meta['followers'] is not None else '?'}"
         f" | об аккаунте: {about_note} | {header_note}"
         f" | instagram: @{ig.username} ({ig.source}{'?' if ig.confidence == 'guessed' else ''})"
+        f" | гео: {geo_note}"
     )
     return feed, None

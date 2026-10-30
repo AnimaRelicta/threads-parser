@@ -17,6 +17,7 @@ threads-parser/
 │   ├── run.py         # CLI: парсинг профилей
 │   ├── search.py      # CLI: поиск по выдаче Threads, --refilter и --stats (БД, без браузера)
 │   ├── discover.py    # CLI: новые профили по авторам постов и веток (БД, без браузера)
+│   ├── geo.py         # CLI: страна/город профилей КЗ/УЗ (rescan/stats/list, БД, без браузера)
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
 │   ├── dbadmin.py     # CLI: Postgres (migrate/status/import-accounts/import-profiles/import-search)
 │   ├── spam.py        # CLI: спам-профили (проверка по БД, список банов, разбан)
@@ -35,6 +36,7 @@ threads-parser/
 uv run scripts/cli.py parse olx_vetka_astana --limit 5 --comments   # = run.py
 uv run scripts/cli.py search "олх ветка астана" --since 7d          # = search.py
 uv run scripts/cli.py discover --since 7d --dry-run                 # = discover.py
+uv run scripts/cli.py geo stats                                     # = geo.py
 uv run scripts/cli.py accounts check --headless                     # = accounts.py
 uv run scripts/cli.py db migrate                                    # = dbadmin.py
 uv run scripts/cli.py parse --help                                  # справка подкоманды
@@ -65,6 +67,7 @@ uv run scripts/cli.py parse --help                                  # справ
 | `logs.py` | Журнал воркеров: метка в строках лога и счётчики текущего профиля. | `TAG`, `PSTAT`, `pstat`, `log` |
 | `timeutil.py` | Время и даты: ISO-строки, разбор --since, сдвиг месяцев. | `iso`, `ts_from_iso`, `parse_dt`, `shift_months`, `parse_since` |
 | `textfilter.py` | Фильтр «олх»: версия правил и классификация поста (approved/rejected, что и где сработало). | `FILTER_VERSION`, `FILTER_RE`, `normalize_text`, `classify` |
+| `geo.py` | Справочник городов/стран КЗ и УЗ (кириллица, латиница, падежи), `find_locations`; сигналы профиля (about_location, телефон WhatsApp, био, имя, темы), итог с приоритетом и флагом конфликта. | `DETECTOR_VERSION`, `find_locations`, `country_from_phone`, `profile_signals`, `resolve` |
 | `fsio.py` | Чтение и запись файлов: JSON, JSONL, списки профилей. | `read_json`, `read_jsonl`, `write_jsonl_atomic`, `read_usernames`, `normalize_username` |
 
 ### `db/` — Postgres (схема `threads`)
@@ -77,6 +80,7 @@ uv run scripts/cli.py parse --help                                  # справ
 | `posts.py` | Посты, комментарии, медиа, якоря и пропущенные посты профиля: запись и чтение в прежнем формате словарей. | `save_post`, `load_profile_posts`, `mark_skipped`, `save_anchor`, `save_meta`, `upsert_topic` |
 | `profiles.py` | Хранилище профильного пайплайна поверх пула: общий для воркеров запуска. | `ProfileStore`, `ProfileState` |
 | `search.py` | Поиск: очередь `search_jobs`, найденные посты, связи `post_hits`, пересчёт фильтра. | `ensure_job`, `start_job`, `finish_job`, `save_hits`, `refilter` |
+| `geo.py` | Локации (`location_mentions`, `profiles.about_country`): запись при сборе профиля и поста, пересчёт `rescan`, выборки для CLI. | `save_profile_geo`, `save_post_mentions`, `rescan`, `load_profile_geo` |
 | `legacy.py` | Разовый перенос старых файлов (posts.json профилей, posts.jsonl и jobs.json поиска). | `normalize_post`, `import_profiles`, `import_search` |
 | `runs.py` | Запуски: `runs`, `run_accounts`, `profile_runs`. | `start_run`, `finalize_run`, `finish_run`, `save_profile_runs`, `ensure_profile` |
 | `discovery.py` | Новые профили по авторам: кандидаты из `comments.author` и `posts.author_username`, вставка в `profiles`. | `find_candidates`, `insert_candidates`, `discover_authors` |
@@ -441,3 +445,16 @@ uv run scripts/run.py --source authors --threads-only --since 7d   # собра�
 ## Instagram: отчёт
 
 `uv run scripts/cli.py instagram stats` (сколько профилей со связью, по источникам) и `instagram list [--source ...] [--confidence guessed] [--csv файл]` (`scripts/instagram.py`).
+
+## Страна и город профилей (КЗ, УЗ)
+
+Сигналы по убыванию надёжности: `about_location` («Об этом профиле»; не КЗ/УЗ сохраняется как `OTHER`) > телефон в WhatsApp-ссылке (998 → UZ; 7 + 6xx/7xx → KZ, российские и неоднозначные номера не считаются) > био > имя из about > темы шапки. Города в текстах веток (`post_text`) слабый сигнал: хранятся отдельно и в итог не входят.
+
+В БД лежат только факты (`profiles.about_country`, `location_mentions`, миграция 011); итог считается при чтении (`core/geo.py::resolve`), поэтому правила меняются без миграций. Если надёжные источники называют разные страны, итог берётся из самого надёжного, строка помечается КОНФЛИКТ и показывает все источники. Сигналы профиля пишутся в `open_profile` без запросов к Threads, упоминания постов, при сохранении поста; ошибки детектора только логируются.
+
+```bash
+uv run scripts/cli.py geo rescan [--force]                  # пересчёт по данным в БД (после правки справочника: поднять DETECTOR_VERSION)
+uv run scripts/cli.py geo stats                             # топ стран/городов по профилям и постам, без данных, источники
+uv run scripts/cli.py geo list --country KZ --city Алматы [--csv файл]
+uv run python tests/geo_check.py                            # проверка без сети и БД
+```
