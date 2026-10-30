@@ -361,6 +361,31 @@ async def save_meta(conn: asyncpg.Connection, profile_id: int, meta: dict) -> No
     )
 
 
+async def save_about(conn: asyncpg.Connection, profile_id: int, about) -> None:
+    """Окно «Об этом профиле» (core.about.About): имя, дата регистрации, местоположение, все строки."""
+    await conn.execute(
+        """
+        UPDATE profiles SET about_name = $2, about_joined = $3, about_location = $4,
+            about_raw = $5, about_fetched_at = now()
+        WHERE id = $1
+        """,
+        profile_id,
+        about.name,
+        about.joined,
+        about.location,
+        about.raw,
+    )
+
+
+async def about_fetched(conn: asyncpg.Connection, profile_id: int) -> bool:
+    """True, если окно «Об этом профиле» этого профиля уже прочитано."""
+    return bool(
+        await conn.fetchval(
+            "SELECT about_fetched_at IS NOT NULL FROM profiles WHERE id = $1", profile_id
+        )
+    )
+
+
 def _keep_full(col: str) -> str:
     """Поле обновляется быстрым сбором, только пока ветка не разобрана полностью."""
     return (

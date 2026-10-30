@@ -9,6 +9,7 @@ from core.biography import biography_from_json
 from core.followers import followers_from_json, followers_from_og
 from core.logs import log
 from db.profiles import ProfileStore
+from scrape.about import fetch_about
 from scrape.extract import read_embedded
 from scrape.harvest import FeedIndex
 
@@ -70,9 +71,21 @@ async def open_profile(
         pass
 
     await store.save_meta(profile_id, meta)
+
+    # «···» → «Об этом профиле»: имя, дата регистрации, местоположение. Один раз на профиль
+    # (about_fetched_at); не вышло — не фатально, повторится при следующем проходе.
+    if await store.about_fetched(profile_id):
+        about_note = "уже собран"
+    else:
+        about = await fetch_about(grid_page, meta["url"])
+        if about:
+            await store.save_about(profile_id, about)
+            about_note = f"собран, место: {about.location or 'не указано'}"
+        else:
+            about_note = "НЕ удалось собрать"
     log(
         f"[+] {meta.get('og_title') or meta.get('title')}"
         f" | подписчиков: {meta['followers'] if meta['followers'] is not None else '?'}"
-        f" | био: {'есть (' + str(len(meta['bio'])) + ' симв.)' if meta['bio'] else 'не нашли'}"
+        f" | об аккаунте: {about_note}"
     )
     return feed, None
