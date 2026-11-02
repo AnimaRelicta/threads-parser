@@ -24,7 +24,7 @@ from scrape.posts import (
     scrape_post,
     write_captions,
 )
-from scrape.report import media_totals
+from scrape.report import media_totals, new_counts, new_result
 from scrape.spamcheck import check_feed
 
 
@@ -35,18 +35,8 @@ async def run_profile(
 
     Состояние (посты, пропущенные, якорь) читается из Postgres и пишется туда же по мере работы."""
     cutoff = args.cutoff
-    result = {
-        "username": username,
-        "status": "ok",
-        "saved": 0,
-        "new_comments": 0,
-        "fresh_posts": 0,
-        "newest": None,
-        "note": "",
-        "mode": "full",
-        "abort_kind": None,
-    }
-    cnt = {"refreshed": 0, "skipped_old": 0, "skipped_video": 0, "unchanged": 0}
+    result = new_result(username, "full")
+    cnt = new_counts()
 
     out_dir = Path(args.output) / username
     media_dir = out_dir / "media"

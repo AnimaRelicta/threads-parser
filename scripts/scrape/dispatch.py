@@ -30,7 +30,7 @@ from scrape.consts import BLOCKED_RESOURCES, UNLIMITED_DEPTH
 from scrape.fill import run_fill
 from scrape.profile import run_profile
 from scrape.profile_only import run_profile_only
-from scrape.report import print_summary, profile_run_entry
+from scrape.report import new_result, print_summary, profile_run_entry
 from scrape.threads import run_threads
 
 
@@ -164,15 +164,9 @@ async def worker_main(
                 except (PlaywrightError, *DB_ERRORS) as e:
                     is_db = not isinstance(e, PlaywrightError)
                     log(f"[!] Ошибка {'БД' if is_db else 'браузера'}: {str(e)[:200]}")
-                    res = {
-                        "username": name,
-                        "status": "error",
-                        "saved": 0,
-                        "new_comments": 0,
-                        "fresh_posts": 0,
-                        "newest": None,
-                        "note": "ошибка БД" if is_db else "ошибка браузера",
-                    }
+                    res = new_result(
+                        name, mode, "error", "ошибка БД" if is_db else "ошибка браузера"
+                    )
                 state.add_stat(
                     account,
                     e429=1 if res.get("abort_kind") == "429" else 0,
@@ -404,16 +398,7 @@ def run(args, st: Settings) -> None:
     results_list = []
     for u in usernames:
         results_list.append(
-            state.got.get(u)
-            or {
-                "username": u,
-                "status": "not_run",
-                "saved": 0,
-                "new_comments": 0,
-                "fresh_posts": 0,
-                "newest": None,
-                "note": "не обработан: запустите ещё раз",
-            }
+            state.got.get(u) or new_result(u, mode, "not_run", "не обработан: запустите ещё раз")
         )
     print_summary(results_list, args.cutoff)
     serializable = [

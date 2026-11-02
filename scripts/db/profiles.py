@@ -23,17 +23,6 @@ SOURCE_SQL = {
     "search": "p.is_target AND NOT p.is_banned AND p.discovered_via = 'search'",
     "authors": "p.is_target AND NOT p.is_banned AND p.discovered_via = 'author'",
 }
-NEEDS_DISCOVERY = ("search", "authors")
-
-
-async def _has_column(conn: asyncpg.Connection, column: str) -> bool:
-    return bool(
-        await conn.fetchval(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_schema = 'threads' AND table_name = 'profiles' AND column_name = $1",
-            column,
-        )
-    )
 
 
 def parse_source(value: str) -> tuple[str, list[str]]:
@@ -57,32 +46,16 @@ async def list_targets(
 ) -> list[str]:
     """Ники профилей для запуска: all | new | search | authors | «ник1,ник2».
 
-    search и authors опираются на profiles.discovered_via, review_status на
-    profiles.review_status (миграция 003_discovery); без неё понятная ошибка.
+    search и authors опираются на profiles.discovered_via, review_status на profiles.review_status.
     """
     kind, names = parse_source(source)
     if kind == "list":
         return names
-    if (kind in NEEDS_DISCOVERY and not await _has_column(conn, "discovered_via")) or (
-        review_status and not await _has_column(conn, "review_status")
-    ):
-        raise SystemExit(
-            f"--source {kind}: в profiles нет discovered_via/review_status "
-            "(миграция 003_discovery): uv run scripts/cli.py db migrate"
-        )
     where, args = SOURCE_SQL[kind], []
     if review_status:
         where += " AND p.review_status = $1"
         args.append(review_status)
-    try:
-        rows = await conn.fetch(
-            f"SELECT p.username FROM profiles p WHERE {where} ORDER BY p.id", *args
-        )
-    except asyncpg.UndefinedColumnError as e:
-        raise SystemExit(
-            f"В profiles нет колонок бана ({e}). Примените миграцию 006: "
-            "uv run scripts/cli.py db migrate"
-        ) from e
+    rows = await conn.fetch(f"SELECT p.username FROM profiles p WHERE {where} ORDER BY p.id", *args)
     return [r["username"] for r in rows]
 
 

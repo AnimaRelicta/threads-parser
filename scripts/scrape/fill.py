@@ -17,6 +17,7 @@ from core.logs import log
 from db.profiles import ProfileStore
 from scrape.classgate import gate_db, skip
 from scrape.posts import scrape_post
+from scrape.report import new_counts, new_result
 
 MAX_ERRORS_IN_ROW = 5
 
@@ -30,18 +31,8 @@ async def run_fill(
     acc: Account, post_page, net: Net, username: str, args, store: ProfileStore
 ) -> dict:
     """Разбирает неразобранные ветки профиля за период. Формат результата как у run_profile()."""
-    result = {
-        "username": username,
-        "status": "ok",
-        "saved": 0,
-        "new_comments": 0,
-        "fresh_posts": 0,
-        "newest": None,
-        "note": "",
-        "mode": "fill",
-        "abort_kind": None,
-    }
-    cnt = {"refreshed": 0, "skipped_old": 0, "skipped_video": 0, "unchanged": 0}
+    result = new_result(username, "fill")
+    cnt = new_counts()
     pid = await store.ensure_profile(username)
     ban = await store.banned_reason(pid)
     if ban:

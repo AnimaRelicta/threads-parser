@@ -134,16 +134,10 @@ async def discover_authors(
     dry_run: bool = False,
 ) -> DiscoveryResult:
     """Находит новых авторов и (если не dry_run) заводит их профилями одной транзакцией."""
-    try:
-        async with conn.transaction():
-            result = DiscoveryResult(candidates=await find_candidates(conn, since, min_mentions))
-            if not dry_run:
-                result.added = await insert_candidates(conn, result.candidates)
-    except asyncpg.UndefinedColumnError as e:
-        raise SystemExit(
-            f"В БД нет колонок поиска по авторам ({e}). "
-            "Примените миграцию: uv run scripts/cli.py db migrate"
-        ) from e
+    async with conn.transaction():
+        result = DiscoveryResult(candidates=await find_candidates(conn, since, min_mentions))
+        if not dry_run:
+            result.added = await insert_candidates(conn, result.candidates)
     return result
 
 
@@ -151,13 +145,7 @@ async def discover_tracked(
     conn: asyncpg.Connection, since: datetime | None, min_mentions: int, settings: dict
 ) -> DiscoveryResult:
     """discover_authors с записью в runs (kind='discover'); итоги лежат в runs.settings."""
-    try:
-        run_id = await start_run(conn, "discover", settings)
-    except asyncpg.CheckViolationError as e:
-        raise SystemExit(
-            "runs.kind не допускает discover. Примените миграцию 004: "
-            "uv run scripts/cli.py db migrate"
-        ) from e
+    run_id = await start_run(conn, "discover", settings)
     try:
         res = await discover_authors(conn, since, min_mentions)
     except KeyboardInterrupt:

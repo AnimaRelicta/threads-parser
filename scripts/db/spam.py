@@ -48,21 +48,11 @@ def class_rules(st: Settings) -> ClassRules:
     )
 
 
-def _missing_migration(e: asyncpg.UndefinedColumnError) -> SystemExit:
-    return SystemExit(
-        f"В БД нет колонок бана или класса ({e}). Примените миграции: "
-        "uv run scripts/cli.py db migrate"
-    )
-
-
 async def banned_reason(conn: asyncpg.Connection, profile_id: int) -> str | None:
     """Причина бана или None, если профиль не забанен."""
-    try:
-        row = await conn.fetchrow(
-            "SELECT is_banned, ban_reason FROM profiles WHERE id = $1", profile_id
-        )
-    except asyncpg.UndefinedColumnError as e:
-        raise _missing_migration(e) from e
+    row = await conn.fetchrow(
+        "SELECT is_banned, ban_reason FROM profiles WHERE id = $1", profile_id
+    )
     if row and row["is_banned"]:
         return row["ban_reason"] or "забанен"
     return None
@@ -70,17 +60,14 @@ async def banned_reason(conn: asyncpg.Connection, profile_id: int) -> str | None
 
 async def save_verdict(conn: asyncpg.Connection, profile_id: int, v: Verdict) -> bool:
     """Пишет вердикт; True, если профиль в итоге забанен этим вызовом."""
-    try:
-        row = await conn.fetchrow(
-            SAVE_SQL,
-            profile_id,
-            v.score,
-            {"signals": v.signals, "metrics": v.metrics, "sample": v.sample},
-            v.is_spam,
-            v.reason or None,
-        )
-    except asyncpg.UndefinedColumnError as e:
-        raise _missing_migration(e) from e
+    row = await conn.fetchrow(
+        SAVE_SQL,
+        profile_id,
+        v.score,
+        {"signals": v.signals, "metrics": v.metrics, "sample": v.sample},
+        v.is_spam,
+        v.reason or None,
+    )
     return bool(row and row["is_banned"])
 
 
@@ -91,11 +78,8 @@ async def recent_threads(
 
 
 async def followers_count(conn: asyncpg.Connection, profile_id: int) -> int | None:
-    """Подписчики профиля из БД; None, если неизвестны (или нет миграции 007)."""
-    try:
-        return await conn.fetchval("SELECT followers_count FROM profiles WHERE id = $1", profile_id)
-    except asyncpg.UndefinedColumnError:
-        return None
+    """Подписчики профиля из БД; None, если неизвестны."""
+    return await conn.fetchval("SELECT followers_count FROM profiles WHERE id = $1", profile_id)
 
 
 async def check_profile(
@@ -117,15 +101,12 @@ async def save_class(conn: asyncpg.Connection, profile_id: int, cv: ClassVerdict
     """Пишет класс профиля (или NULL, если класса нет). Мало данных: прежний класс не трогаем."""
     if cv.no_data:
         return
-    try:
-        await conn.execute(
-            CLASS_SQL,
-            profile_id,
-            cv.code,
-            {"reason": cv.reason, "sample": cv.sample, "metrics": cv.metrics},
-        )
-    except asyncpg.UndefinedColumnError as e:
-        raise _missing_migration(e) from e
+    await conn.execute(
+        CLASS_SQL,
+        profile_id,
+        cv.code,
+        {"reason": cv.reason, "sample": cv.sample, "metrics": cv.metrics},
+    )
 
 
 async def check_class(
@@ -149,12 +130,9 @@ async def class_state(
     conn: asyncpg.Connection, profile_id: int
 ) -> tuple[int | None, datetime | None]:
     """(класс, когда считали): время пусто = класс ещё ни разу не считали."""
-    try:
-        row = await conn.fetchrow(
-            "SELECT spam_class, spam_class_at FROM profiles WHERE id = $1", profile_id
-        )
-    except asyncpg.UndefinedColumnError as e:
-        raise _missing_migration(e) from e
+    row = await conn.fetchrow(
+        "SELECT spam_class, spam_class_at FROM profiles WHERE id = $1", profile_id
+    )
     return (row["spam_class"], row["spam_class_at"]) if row else (None, None)
 
 

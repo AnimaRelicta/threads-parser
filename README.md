@@ -89,6 +89,7 @@ uv run scripts/cli.py parse --help                                  # справ
 | `stats.py` | Реестр отчётов (SQL + заголовок) и вывод таблицей. | `Report`, `REPORTS`, `run_report`, `format_table` |
 | `migrations/001_init.sql` | Начальная схема (аккаунты, запуски, профили, посты, комментарии, медиа, поиск, темы). | |
 | `migrations/005_categories.sql` | Справочник `categories` (7 категорий), колонки категории в `profiles`, триггер допустимых переходов `review_status`. | |
+| `migrations/013_cleanup.sql` | Уборка схемы: из `search_jobs` убраны `origin`, `parent_job_id`, `topic_id`, `depth` и из `topics` `is_active` (задел под несуществующий `--follow-topics`), удалён индекс-дубль `location_mentions_entity`. | |
 | `migrations/012_spam_class.sql` | Колонки `profiles.spam_class` (1/2/3), `spam_class_info`, `spam_class_at`. | |
 | `migrations/006_spam_ban.sql` | Колонки `profiles.is_banned`, `ban_reason`, `banned_at`, `spam_score`, `spam_signals`, `spam_checked_at`, `spam_whitelist`. | |
 | `migrations/004_audit_runs.sql` | Удалена неиспользуемая `custom_topics`; `runs.kind` = `profiles`/`search`/`discover`/`classify`; комментарий к `skipped_posts`. | |
@@ -166,7 +167,7 @@ approved-постов и состояние очереди `search_jobs`. CSV н
 | `profile.py` | Обработка одного профиля (полный проход: ветки, посты под ветками, медиа). | `run_profile` |
 | `profile_only.py` | Только метаданные профиля без обхода ленты и веток (`--profile-only`). | `run_profile_only` |
 | `threads.py` | Быстрый сбор веток профиля за период только из ленты, без открытия веток (`--threads-only`). | `run_threads` |
-| `report.py` | Итоги запуска: счётчики, записи журнала, сводка. | `media_totals`, `profile_run_entry`, `print_summary` |
+| `report.py` | Итоги запуска: счётчики, записи журнала, сводка. | `new_counts`, `new_result`, `media_totals`, `profile_run_entry`, `print_summary` |
 | `dispatch.py` | Очередь профилей и воркеры n x m; точка запуска run(). | `Dispatcher`, `RunState`, `worker_main`, `account_main`, `main_async`, `run` |
 
 ### `serp/` — Поиск по Threads (`search.py`)

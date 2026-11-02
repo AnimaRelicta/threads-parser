@@ -12,6 +12,27 @@ MODE_LABELS = {
 }
 
 
+def new_counts() -> dict:
+    """Счётчики профиля за проход (читает profile_run_entry)."""
+    return {"refreshed": 0, "skipped_old": 0, "skipped_video": 0, "unchanged": 0}
+
+
+def new_result(username: str, mode: str, status: str = "ok", note: str = "", **extra) -> dict:
+    """Пустой итог профиля: ключи, которые читают print_summary и profile_run_entry."""
+    return {
+        "username": username,
+        "status": status,
+        "saved": 0,
+        "new_comments": 0,
+        "fresh_posts": 0,
+        "newest": None,
+        "note": note,
+        "mode": mode,
+        "abort_kind": None,
+        **extra,
+    }
+
+
 def media_totals(posts: list[dict]) -> dict:
     """Сколько медиа лежит в файле профиля: у постов и в комментариях (их там большинство)."""
     in_posts = [m for p in posts for m in p.get("media") or []]

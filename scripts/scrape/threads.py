@@ -16,6 +16,7 @@ from scrape.classgate import gate_feed, precheck, skip
 from scrape.consts import NO_DATA_WAIT_MS, OLD_STREAK_STOP, PINNED_LOOKAHEAD
 from scrape.entry import open_profile
 from scrape.feed import Lookahead, iter_post_links
+from scrape.report import new_counts, new_result
 from scrape.spamcheck import check_feed
 
 FLUSH_EVERY = 10  # сколько веток копим перед записью в БД
@@ -24,18 +25,8 @@ FLUSH_EVERY = 10  # сколько веток копим перед запись
 async def run_threads(grid_page, net: Net, username: str, args, store: ProfileStore) -> dict:
     """Собирает ветки одного профиля за период. Формат результата как у run_profile()."""
     cutoff = args.cutoff
-    result = {
-        "username": username,
-        "status": "ok",
-        "saved": 0,
-        "new_comments": 0,
-        "fresh_posts": 0,
-        "newest": None,
-        "note": "",
-        "mode": "threads",
-        "abort_kind": None,
-    }
-    cnt = {"refreshed": 0, "skipped_old": 0, "skipped_video": 0, "unchanged": 0}
+    result = new_result(username, "threads")
+    cnt = new_counts()
 
     pid = await store.ensure_profile(username)
     ban = await store.banned_reason(pid)
