@@ -23,6 +23,7 @@ from core.timeutil import parse_since
 from db.pool import DB_ERRORS, create_pool, run_sync
 from db.profiles import ProfileStore, list_targets
 from db.runs import finalize_run, start_run
+from db.spam import class_rules
 from registry.store import get_account, now_iso, pick_accounts
 from scrape.capture import make_handler
 from scrape.consts import BLOCKED_RESOURCES, UNLIMITED_DEPTH
@@ -266,7 +267,9 @@ async def main_async(
     disp = Dispatcher(usernames)
     # Пул на весь запуск: воркеры берут соединения на время одной записи
     pool = await create_pool(st, max_size=max(5, len(accounts) * m + 2))
-    state.store = ProfileStore(pool, Path(args.output), rules_with(st.spam_min_followers))
+    state.store = ProfileStore(
+        pool, Path(args.output), rules_with(st.spam_min_followers), class_rules(st)
+    )
     try:
         async with async_playwright() as p:
             outcomes = await asyncio.gather(

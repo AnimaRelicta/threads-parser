@@ -10,6 +10,7 @@
     uv run scripts/spam.py --check --apply            # забанить найденных
     uv run scripts/spam.py --check --source authors   # только профили, найденные discover
     uv run scripts/spam.py --check adina.rahatt       # один профиль, подробные сигналы
+    uv run scripts/spam.py --classes [--class-code 3] # профили с классом 1/2/3 (без бана)
     uv run scripts/spam.py --list                     # кто в бане и почему
     uv run scripts/spam.py --unban adina.rahatt       # снять бан и больше не банить
 """
@@ -20,6 +21,7 @@ import json
 from config import ENV_FILE, load_settings
 from core.fsio import normalize_username
 from core.spam import RULES, rules_with
+from core.spamclass import CLASS_TITLES
 from db import spam as spam_repo
 from db.pool import run_sync
 from db.profiles import list_targets
@@ -33,6 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="проверить профили по веткам из БД")
     mode.add_argument("--list", action="store_true", help="показать забаненные профили")
+    mode.add_argument(
+        "--classes", action="store_true", help="показать профили с классом 1/2/3 (spam_class)"
+    )
     mode.add_argument("--unban", metavar="НИК", help="снять бан и внести в белый список")
     ap.add_argument(
         "--source",
@@ -41,20 +46,32 @@ def build_parser() -> argparse.ArgumentParser:
         "(по умолчанию all, забаненные не берутся)",
     )
     ap.add_argument(
-        "--apply", action="store_true", help="записать вердикты и забанить (без флага только показ)"
+        "--class-code", type=int, choices=(1, 2, 3), help="для --classes: только этот класс"
+    )
+    ap.add_argument(
+        "--apply",
+        action="store_true",
+        help="записать вердикты, классы и забанить (без флага только показ)",
     )
     ap.add_argument("--show", type=int, default=30, help="сколько строк списка вывести, 0 = все")
     return ap
 
 
-async def _check(conn, names: list[str], apply: bool, show: int, verbose: bool, rules):
+async def _check(conn, names: list[str], apply: bool, show: int, verbose: bool, rules, crules):
     rows = await conn.fetch(
         "SELECT id, username FROM profiles WHERE lower(username) = ANY($1::text[]) ORDER BY id",
         [n.lower() for n in names],
     )
-    stats = {"checked": 0, "spam": 0, "few": 0}
+    stats = {"checked": 0, "spam": 0, "few": 0, "classes": {1: 0, 2: 0, 3: 0}}
     flagged = []
+    classed = []
     for r in rows:
+        cv = await spam_repo.check_class(conn, r["id"], apply=apply, rules=crules)
+        if cv.code:
+            stats["classes"][cv.code] += 1
+            classed.append((r["username"], cv))
+        elif verbose:
+            print(f"  @{r['username']}: класса нет ({cv.reason})")
         v = await spam_repo.check_profile(conn, r["id"], apply=apply, rules=rules)
         if v.sample < RULES.min_posts:
             stats["few"] += 1
@@ -71,6 +88,10 @@ async def _check(conn, names: list[str], apply: bool, show: int, verbose: bool, 
             print("    " + json.dumps(v.metrics, ensure_ascii=False))
     if show > 0 and len(flagged) > show:
         print(f"  ... и ещё {len(flagged) - show}")
+    for name, cv in classed if show <= 0 else classed[:show]:
+        print(f"  @{name:<30} класс {cv.code} {cv.reason}")
+    if show > 0 and len(classed) > show:
+        print(f"  ... и ещё {len(classed) - show} с классом")
     return stats
 
 
@@ -98,6 +119,23 @@ def main() -> None:
         print(f"[*] В бане: {len(rows)}")
         return
 
+    if args.classes:
+        rows = run_sync(
+            st,
+            lambda conn: conn.fetch(
+                "SELECT username, spam_class, spam_class_info->>'reason' AS reason "
+                "FROM profiles WHERE spam_class IS NOT NULL "
+                "AND ($1::int IS NULL OR spam_class = $1) ORDER BY spam_class DESC, username",
+                args.class_code,
+            ),
+        )
+        shown = rows if args.show <= 0 else rows[: args.show]
+        for r in shown:
+            print(f"  @{r['username']:<30} класс {r['spam_class']} {r['reason']}")
+        by_class = {c: sum(r["spam_class"] == c for r in rows) for c in (1, 2, 3)}
+        print("[*] " + "; ".join(f"{c} ({CLASS_TITLES[c]}): {n}" for c, n in by_class.items()))
+        return
+
     verbose = bool(args.username)
     if args.username:
         nick = normalize_username(args.username)
@@ -109,11 +147,15 @@ def main() -> None:
     if not names:
         raise SystemExit("Нет профилей для проверки")
     rules = rules_with(st.spam_min_followers)
-    stats = run_sync(st, lambda conn: _check(conn, names, args.apply, args.show, verbose, rules))
+    crules = spam_repo.class_rules(st)
+    stats = run_sync(
+        st, lambda conn: _check(conn, names, args.apply, args.show, verbose, rules, crules)
+    )
     print(
         f"[*] Проверено: {stats['checked']}, спам: {stats['spam']}, "
         f"мало веток для вывода: {stats['few']}"
     )
+    print("[*] Классы: " + ", ".join(f"{c}: {n}" for c, n in stats["classes"].items()))
     if stats["spam"]:
         print("[+] Забанено" if args.apply else "[*] Без --apply ничего не записано")
 

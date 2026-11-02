@@ -14,7 +14,7 @@
 import argparse
 import sys
 
-from config import ENV_FILE, load_settings
+from config import DEFAULT_LIMIT, ENV_FILE, load_settings
 from scrape.dispatch import run
 
 
@@ -69,7 +69,8 @@ def build_parser(st) -> argparse.ArgumentParser:
         "--limit",
         type=int,
         default=st.limit,
-        help="сколько подходящих постов на профиль, 0 = все (LIMIT)",
+        help="сколько подходящих постов (веток) на профиль, 0 = все (LIMIT); "
+        "по умолчанию 10, а для --fill-threads все",
     )
     ap.add_argument(
         "--comments",
@@ -182,6 +183,8 @@ def main() -> None:
         raise SystemExit("--stop-after должен быть не меньше 1")
     if args.threads_only and args.fill_threads:
         raise SystemExit("--threads-only и --fill-threads несовместимы: это два разных шага")
+    if args.limit is None:  # ни флага, ни LIMIT в .env
+        args.limit = 0 if args.fill_threads else DEFAULT_LIMIT
     if not args.username and not args.file and not args.source:
         args.file = str(st.profiles_file)
     if args.threads_only:

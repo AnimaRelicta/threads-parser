@@ -2,7 +2,9 @@
 
 import asyncpg
 
+from config import Settings
 from core.spam import RULES, SpamRules, Verdict, analyze
+from core.spamclass import CLASS_RULES, ClassRules, ClassVerdict, class_rules_with, classify
 
 RECENT_SQL = """
 SELECT extract(epoch FROM date_utc)::bigint AS ts, text, likes, reply_count AS replies,
@@ -27,9 +29,27 @@ RETURNING is_banned
 """
 
 
+CLASS_SQL = """
+UPDATE profiles SET spam_class = $2, spam_class_info = $3::jsonb, spam_class_at = now()
+WHERE id = $1
+"""
+
+
+def class_rules(st: Settings) -> ClassRules:
+    """Пороги классов 1/2/3 из настроек (SPAM_CLASS_*)."""
+    return class_rules_with(
+        st.spam_class_sample,
+        st.spam_class_low_followers,
+        st.spam_class_gap_hours,
+        st.spam_class_many_replies,
+        st.spam_class_few_replies,
+    )
+
+
 def _missing_migration(e: asyncpg.UndefinedColumnError) -> SystemExit:
     return SystemExit(
-        f"В БД нет колонок бана ({e}). Примените миграцию 006: uv run scripts/cli.py db migrate"
+        f"В БД нет колонок бана или класса ({e}). Примените миграции: "
+        "uv run scripts/cli.py db migrate"
     )
 
 
@@ -89,6 +109,38 @@ async def check_profile(
     if apply:
         await save_verdict(conn, profile_id, v)
     return v
+
+
+async def save_class(conn: asyncpg.Connection, profile_id: int, cv: ClassVerdict) -> None:
+    """Пишет класс профиля (или NULL, если класса нет). Мало данных: прежний класс не трогаем."""
+    if cv.no_data:
+        return
+    try:
+        await conn.execute(
+            CLASS_SQL,
+            profile_id,
+            cv.code,
+            {"reason": cv.reason, "sample": cv.sample, "metrics": cv.metrics},
+        )
+    except asyncpg.UndefinedColumnError as e:
+        raise _missing_migration(e) from e
+
+
+async def check_class(
+    conn: asyncpg.Connection,
+    profile_id: int,
+    apply: bool = True,
+    rules: ClassRules = CLASS_RULES,
+) -> ClassVerdict:
+    """Класс профиля по свежим веткам из БД; apply=False только считает, ничего не пишет."""
+    cv = classify(
+        await recent_threads(conn, profile_id, rules.sample),
+        await followers_count(conn, profile_id),
+        rules,
+    )
+    if apply:
+        await save_class(conn, profile_id, cv)
+    return cv
 
 
 async def unban(conn: asyncpg.Connection, username: str) -> bool:

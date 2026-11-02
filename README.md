@@ -20,7 +20,7 @@ threads-parser/
 │   ├── geo.py         # CLI: страна/город профилей КЗ/УЗ (rescan/stats/list, БД, без браузера)
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
 │   ├── dbadmin.py     # CLI: Postgres (migrate/status/import-accounts/import-profiles/import-search)
-│   ├── spam.py        # CLI: спам-профили (проверка по БД, список банов, разбан)
+│   ├── spam.py        # CLI: спам-профили (проверка по БД, классы 1/2/3, список банов, разбан)
 │   ├── classify/      # пакет: категории профилей через LLM (запуск: cli.py classify)
 │   ├── core/  db/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
 ├── data/              # списки профилей и запросов, куки, media/captions.txt/summary.json
@@ -87,6 +87,7 @@ uv run scripts/cli.py parse --help                                  # справ
 | `stats.py` | Реестр отчётов (SQL + заголовок) и вывод таблицей. | `Report`, `REPORTS`, `run_report`, `format_table` |
 | `migrations/001_init.sql` | Начальная схема (аккаунты, запуски, профили, посты, комментарии, медиа, поиск, темы). | |
 | `migrations/005_categories.sql` | Справочник `categories` (7 категорий), колонки категории в `profiles`, триггер допустимых переходов `review_status`. | |
+| `migrations/012_spam_class.sql` | Колонки `profiles.spam_class` (1/2/3), `spam_class_info`, `spam_class_at`. | |
 | `migrations/006_spam_ban.sql` | Колонки `profiles.is_banned`, `ban_reason`, `banned_at`, `spam_score`, `spam_signals`, `spam_checked_at`, `spam_whitelist`. | |
 | `migrations/004_audit_runs.sql` | Удалена неиспользуемая `custom_topics`; `runs.kind` = `profiles`/`search`/`discover`/`classify`; комментарий к `skipped_posts`. | |
 | `migrations/003_discovery.sql` | Колонки `profiles`: `discovered_via`, `discovered_from_profile_id`, `review_status`, `mentions_count`, `discovered_first_code`. | |
@@ -364,6 +365,31 @@ uv run scripts/cli.py spam --check --apply            # забанить най�
 uv run scripts/cli.py spam --check adina.rahatt       # один профиль, со всеми метриками
 uv run scripts/cli.py spam --list                     # кто в бане и почему
 uv run scripts/cli.py spam --unban adina.rahatt       # снять бан и больше не банить
+```
+
+### Классы спам-профилей: `core/spamclass.py`
+
+Кроме автобана ботов профиль получает метку класса 1/2/3 (`profiles.spam_class`, миграция 012). Класс **не банит**: это отдельная метка, `is_banned` по-прежнему ставит только `core/spam.py`. Детекция идёт по ленте в тот же момент, что и проверка на бота (`scrape/spamcheck.py`), и по БД командой `spam.py --check`.
+
+В выборку берутся `SPAM_CLASS_SAMPLE` (по умолчанию **10**) самых свежих веток (закреплённая старая ветка в неё не попадает). Меньше 5 веток или счётчик ответов известен меньше чем у 5: класса нет, прежний класс в БД не меняется.
+
+| Класс | Условие (пороги по умолчанию) | Что это обычно |
+|---|---|---|
+| 1 `board_author` | ветки редко (медиана паузы >= 24 ч), ответов много (медиана >= 20) | автор ведёт барахолку, люди сами пишут в комментах, что продают |
+| 2 `seller` | ветки часто (медиана паузы < 24 ч), ответов мало (медиана <= 5) | выкладывает свои товары и объявления в ветки |
+| 3 `spammer` | как класс 2, и подписчиков меньше 100 (число известно) | спамит ветками |
+
+Приоритет: 3 важнее 2; если подписчики неизвестны (`NULL`), класс 3 не назначается. Пороги: `SPAM_CLASS_SAMPLE`, `SPAM_CLASS_GAP_HOURS`, `SPAM_CLASS_MANY_REPLIES`, `SPAM_CLASS_FEW_REPLIES`, `SPAM_CLASS_LOW_FOLLOWERS` в `scripts/.env`.
+
+Базовый прогон тоже берёт по умолчанию **10** первых веток на профиль (`--limit` / `LIMIT`; `--limit 0` или `LIMIT=0` = все; для `--fill-threads` без `--limit` по-прежнему все).
+
+```bash
+uv run scripts/cli.py db migrate                      # миграция 012
+uv run scripts/cli.py spam --check                    # пробный прогон: классы и баны по БД
+uv run scripts/cli.py spam --check --apply            # записать классы (и забанить ботов)
+uv run scripts/cli.py spam --classes                  # профили с классом, итог по классам
+uv run scripts/cli.py spam --classes --class-code 3   # только класс 3
+uv run python tests/spamclass_check.py                # проверка правил без БД
 ```
 
 ### Разбор собранных веток: `--fill-threads` и выбор профилей `--source`

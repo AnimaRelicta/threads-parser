@@ -9,6 +9,7 @@ import asyncpg
 from core.consts import USERNAME_RE
 from core.fsio import normalize_username
 from core.spam import RULES, SpamRules, Verdict
+from core.spamclass import CLASS_RULES, ClassRules, ClassVerdict
 from db import geo as geo_repo
 from db import posts as repo
 from db import spam as spam_repo
@@ -97,10 +98,20 @@ class ProfileState:
 class ProfileStore:
     """Общий для всех воркеров запуска; media_root = каталог вывода (OUTPUT_DIR)."""
 
-    def __init__(self, pool: asyncpg.Pool, media_root: Path, spam_rules: SpamRules = RULES):
+    def __init__(
+        self,
+        pool: asyncpg.Pool,
+        media_root: Path,
+        spam_rules: SpamRules = RULES,
+        class_rules: ClassRules = CLASS_RULES,
+    ):
         self.pool = pool
         self.media_root = media_root
         self.spam_rules = spam_rules  # пороги спам-детектора (в т. ч. SPAM_MIN_FOLLOWERS)
+        self.class_rules = class_rules  # пороги классов 1/2/3 (SPAM_CLASS_*)
+        self.last_classes: dict[
+            int, int | None
+        ] = {}  # profile_id -> последний залогированный класс
 
     async def load(self, username: str) -> ProfileState:
         async with self.pool.acquire() as conn:
@@ -183,3 +194,8 @@ class ProfileStore:
         """Записывает вердикт спам-детектора; True, если профиль теперь забанен."""
         async with self.pool.acquire() as conn:
             return await spam_repo.save_verdict(conn, profile_id, verdict)
+
+    async def save_spam_class(self, profile_id: int, verdict: ClassVerdict) -> None:
+        """Записывает класс профиля (1/2/3 или NULL); при нехватке данных ничего не пишет."""
+        async with self.pool.acquire() as conn:
+            await spam_repo.save_class(conn, profile_id, verdict)

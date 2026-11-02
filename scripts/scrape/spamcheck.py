@@ -2,6 +2,7 @@
 
 from core.logs import log
 from core.spam import Verdict, analyze, dominant_author
+from core.spamclass import CLASS_TITLES, ClassVerdict, classify
 from db.profiles import ProfileStore
 
 
@@ -22,6 +23,24 @@ def feed_items(infos) -> list[dict]:
     ]
 
 
+async def check_class(
+    store: ProfileStore, profile_id: int, username: str, items: list[dict], followers: int | None
+) -> ClassVerdict:
+    """Класс 1/2/3 по первым веткам ленты (core/spamclass.py); бан не выставляет.
+
+    Проверка идёт на каждой пачке веток: в БД пишем всегда (метрики уточняются), в лог только
+    при смене класса."""
+    cv = classify(items, followers, store.class_rules)
+    if cv.no_data:
+        return cv
+    await store.save_spam_class(profile_id, cv)
+    if store.last_classes.get(profile_id, "new") != cv.code:
+        store.last_classes[profile_id] = cv.code
+        if cv.code:
+            log(f"[CLASS {cv.code}] @{username}: {CLASS_TITLES[cv.code]} ({cv.reason})")
+    return cv
+
+
 async def check_feed(
     store: ProfileStore, profile_id: int, username: str, infos, own_only: bool = False
 ) -> Verdict:
@@ -34,7 +53,9 @@ async def check_feed(
     if own_only:
         items = dominant_author(items)
     rules = store.spam_rules
-    v = analyze(items, rules, await store.followers_count(profile_id))
+    followers = await store.followers_count(profile_id)
+    await check_class(store, profile_id, username, items, followers)
+    v = analyze(items, rules, followers)
     if v.sample < rules.min_posts:
         return v
     banned = await store.save_spam_verdict(profile_id, v)
