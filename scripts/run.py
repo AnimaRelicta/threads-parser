@@ -7,6 +7,8 @@
     uv run scripts/run.py olx_vetka_astana --threads-only --since 7d   # только список веток
     uv run scripts/run.py olx_vetka_astana --fill-threads --since 7d --comments   # разбор этих веток
     uv run scripts/run.py --source new --threads-only --since 7d       # профили без веток
+    uv run scripts/run.py olx_vetka_astana --profile-only              # только метаданные профиля
+    uv run scripts/run.py --source all --profile-only --headless       # то же для всех профилей из БД
     uv run scripts/run.py --comments --depth 3 --accounts account_001,account_002 --workers 2
     uv run scripts/run.py --headless                      # на сервере, по готовым кукам
 """
@@ -33,6 +35,12 @@ def build_parser(st) -> argparse.ArgumentParser:
         action="store_true",
         help="быстрый сбор веток: пройти ленту профиля и сохранить ветки за период "
         "(текст, дата, счётчики) без открытия самих веток, комментариев и медиа",
+    )
+    ap.add_argument(
+        "--profile-only",
+        action="store_true",
+        help="только профиль: подписчики, био, «Об этом профиле», шапка, Instagram, страна; "
+        "ветки не читаются и не сохраняются",
     )
     ap.add_argument(
         "--fill-threads",
@@ -169,11 +177,15 @@ THREADS_ONLY_IGNORED = (
 )
 
 
-def warn_ignored_flags(argv: list[str]) -> None:
-    """Предупреждает о явно переданных флагах, которые --threads-only игнорирует."""
-    used = [f for f in THREADS_ONLY_IGNORED if any(a == f or a.startswith(f + "=") for a in argv)]
+# --profile-only ещё и не читает ленту: период, лимит и остановка по якорю не применяются
+PROFILE_ONLY_IGNORED = (*THREADS_ONLY_IGNORED, "--since", "--limit", "--full", "--stop-after")
+
+
+def warn_ignored_flags(argv: list[str], flags: tuple[str, ...], mode: str) -> None:
+    """Предупреждает о явно переданных флагах, которые выбранный режим игнорирует."""
+    used = [f for f in flags if any(a == f or a.startswith(f + "=") for a in argv)]
     if used:
-        print(f"[!] --threads-only: флаги игнорируются: {', '.join(used)}")
+        print(f"[!] {mode}: флаги игнорируются: {', '.join(used)}")
 
 
 def main() -> None:
@@ -181,14 +193,18 @@ def main() -> None:
     args = build_parser(st).parse_args()
     if args.stop_after < 1:
         raise SystemExit("--stop-after должен быть не меньше 1")
-    if args.threads_only and args.fill_threads:
-        raise SystemExit("--threads-only и --fill-threads несовместимы: это два разных шага")
+    if sum((args.threads_only, args.fill_threads, args.profile_only)) > 1:
+        raise SystemExit(
+            "--threads-only, --fill-threads и --profile-only несовместимы: это разные режимы"
+        )
     if args.limit is None:  # ни флага, ни LIMIT в .env
         args.limit = 0 if args.fill_threads else DEFAULT_LIMIT
     if not args.username and not args.file and not args.source:
         args.file = str(st.profiles_file)
     if args.threads_only:
-        warn_ignored_flags(sys.argv[1:])
+        warn_ignored_flags(sys.argv[1:], THREADS_ONLY_IGNORED, "--threads-only")
+    elif args.profile_only:
+        warn_ignored_flags(sys.argv[1:], PROFILE_ONLY_IGNORED, "--profile-only")
     run(args, st)
 
 

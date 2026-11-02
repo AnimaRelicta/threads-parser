@@ -8,6 +8,7 @@ MODE_LABELS = {
     "only_new": "только новое",
     "threads": "только список веток",
     "fill": "разбор собранных веток",
+    "profile": "только профиль",
 }
 
 
@@ -41,7 +42,7 @@ def profile_run_entry(res: dict) -> dict:
     return {
         "username": res.get("username"),
         "status": res.get("status"),  # ok | empty | not_found | abort | error
-        "mode": res.get("mode"),  # full | only_new | threads
+        "mode": res.get("mode"),  # full | only_new | threads | fill | profile
         "stop_reason": res.get("stop_reason"),  # end | old | limit | known
         "abort_kind": res.get("abort_kind"),  # 429 | auth | None
         "note": res.get("note") or "",

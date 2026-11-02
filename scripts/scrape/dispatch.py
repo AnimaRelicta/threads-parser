@@ -29,8 +29,20 @@ from scrape.capture import make_handler
 from scrape.consts import BLOCKED_RESOURCES, UNLIMITED_DEPTH
 from scrape.fill import run_fill
 from scrape.profile import run_profile
+from scrape.profile_only import run_profile_only
 from scrape.report import print_summary, profile_run_entry
 from scrape.threads import run_threads
+
+
+def run_mode(args) -> str:
+    """Режим запуска: profile (--profile-only) | threads | fill | full (полный проход)."""
+    if getattr(args, "profile_only", False):
+        return "profile"
+    if getattr(args, "threads_only", False):
+        return "threads"
+    if getattr(args, "fill_threads", False):
+        return "fill"
+    return "full"
 
 
 class Dispatcher:
@@ -104,13 +116,12 @@ async def worker_main(
             await asyncio.sleep(stagger)  # разносим старт воркеров
         if grid_page is None:
             grid_page = await acc.ctx.new_page()
-        threads_only = bool(getattr(args, "threads_only", False))
-        fill = bool(getattr(args, "fill_threads", False))
-        if not threads_only:  # быстрому сбору веток вторая вкладка не нужна
+        mode = run_mode(args)
+        if mode in ("full", "fill"):  # профилю и быстрому сбору веток вторая вкладка не нужна
             post_page = await acc.ctx.new_page()  # лента профиля остаётся на месте
             post_page.on("response", make_handler(net.captured, net))
         grid_page.on("response", make_handler(net.grid_captured, net))
-        if not threads_only and not args.no_block:
+        if post_page is not None and not args.no_block:
 
             async def block_heavy(route):
                 try:
@@ -140,10 +151,12 @@ async def worker_main(
                 PSTAT.set(ps)
                 t0, started = time.monotonic(), now_iso()
                 try:
-                    if fill:
+                    if mode == "fill":
                         res = await run_fill(acc, post_page, net, name, args, state.store)
-                    elif threads_only:
+                    elif mode == "threads":
                         res = await run_threads(grid_page, net, name, args, state.store)
+                    elif mode == "profile":
+                        res = await run_profile_only(grid_page, net, name, args, state.store)
                     else:
                         res = await run_profile(
                             acc, grid_page, post_page, net, name, args, state.store
@@ -318,20 +331,21 @@ def run(args, st: Settings) -> None:
         f"[*] Профилей: {len(usernames)} | аккаунтов: {len(accounts)} | "
         f"воркеров на аккаунт: {m} (одновременно до {len(accounts) * m} профилей)"
     )
-    threads_only = bool(getattr(args, "threads_only", False))
-    fill = bool(getattr(args, "fill_threads", False))
-    if fill:
+    mode = run_mode(args)
+    if mode == "fill":
         log("[*] Режим --fill-threads: разбор веток, собранных ранее через --threads-only")
-    if threads_only:
+    elif mode == "threads":
         log("[*] Режим --threads-only: только список веток из ленты, ветки не открываются")
-    if args.cutoff:
+    elif mode == "profile":
+        log("[*] Режим --profile-only: только метаданные профиля, ветки не читаются")
+    if args.cutoff and mode != "profile":
         log(
-            f"[*] Берём {'ветки' if threads_only or fill else 'посты'} "
+            f"[*] Берём {'ветки' if mode in ('threads', 'fill') else 'посты'} "
             f"не старше {args.cutoff:%Y-%m-%d %H:%M} UTC"
         )
-    if getattr(args, "full", False):
+    if getattr(args, "full", False) and mode != "profile":
         log("[*] --full: якорь игнорируется, полный проход по окну")
-    if args.comments and not threads_only:
+    if args.comments and mode in ("full", "fill"):
         log(
             f"[*] Комментарии: глубина "
             f"{'без ограничения' if args.depth == UNLIMITED_DEPTH else args.depth}"
@@ -352,7 +366,7 @@ def run(args, st: Settings) -> None:
         "full": bool(getattr(args, "full", False)),
         "with_videos": bool(args.with_videos),
         "headless": bool(args.headless),
-        "mode": "threads" if threads_only else "fill" if fill else "full",
+        "mode": mode,
     }
     run_id = run_sync(st, lambda conn: start_run(conn, "profiles", run_settings))
     interrupted = False

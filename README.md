@@ -156,12 +156,13 @@ approved-постов и состояние очереди `search_jobs`. CSV н
 | `feed.py` | Лента профиля: ссылки на посты с заглядыванием вперёд. | `Lookahead`, `iter_post_links` |
 | `posts.py` | Сбор и обновление одного поста; читаемый captions.txt. | `comment_lines`, `write_captions`, `scrape_post`, `refresh_comments` … |
 | `anchor.py` | Якорь профиля (хранится в `profile_anchors`): метка самого нового поста для режима «только новое». | `DEFAULT_STOP_AFTER`, `anchor_covers`, `compute_anchor` |
-| `entry.py` | Вход в профиль: открытие ленты, проверки 404/429/логин, метаданные. Общий для `profile.py` и `threads.py`. | `open_profile` |
+| `entry.py` | Вход в профиль: открытие ленты, проверки 404/429/логин, метаданные. Общий для `profile.py`, `threads.py` и `profile_only.py`. | `open_profile` |
 | `about.py` | Окно «···» → «Об этом профиле»: имя, дата регистрации, местоположение (один раз на профиль, `profiles.about_*`, миграция 009). | `fetch_about` |
 | `header.py` | Шапка профиля из DOM без кликов: темы (чипы), ссылки в био (Telegram, WhatsApp, Instagram), «недавние просмотры» (`profiles.topics/links/recent_views`, миграция 010). | `read_header` |
 | `instagram.py` | Связь профиля с Instagram при открытии: ссылка в шапке > JSON страницы > био > догадка по нику (`instagram_links`, догадка помечена `guessed`). | `resolve_instagram` |
 | `fill.py` | Разбор веток, собранных быстрым режимом (`--fill-threads`): ветки берутся из БД, не из ленты. | `run_fill` |
 | `profile.py` | Обработка одного профиля (полный проход: ветки, посты под ветками, медиа). | `run_profile` |
+| `profile_only.py` | Только метаданные профиля без обхода ленты и веток (`--profile-only`). | `run_profile_only` |
 | `threads.py` | Быстрый сбор веток профиля за период только из ленты, без открытия веток (`--threads-only`). | `run_threads` |
 | `report.py` | Итоги запуска: счётчики, записи журнала, сводка. | `media_totals`, `profile_run_entry`, `print_summary` |
 | `dispatch.py` | Очередь профилей и воркеры n x m; точка запуска run(). | `Dispatcher`, `RunState`, `worker_main`, `account_main`, `main_async`, `run` |
@@ -300,8 +301,22 @@ uv run scripts/run.py --accounts account_001,account_002 --workers 2 --since 1m 
 
 Флаги: `--file`, `--accounts`, `--workers`, `--since` (30d, 4w, 1m, 1y или дата), `--limit`,
 `--comments`, `--depth`, `--max-comments`, `--recheck-days`, `--full-rescan`, `--full`,
-`--stop-after`, `--threads-only`, `--fill-threads`, `--source`, `--with-videos`, `--no-block`, `--delay`, `--profile-delay`, `--headless`,
+`--stop-after`, `--threads-only`, `--fill-threads`, `--profile-only`, `--source`, `--with-videos`, `--no-block`, `--delay`, `--profile-delay`, `--headless`,
 `--debug`, `--output`. Справка: `uv run scripts/run.py -h`.
+
+### Только профиль: `--profile-only`
+
+```bash
+uv run scripts/run.py olx_vetka_astana --profile-only
+uv run scripts/run.py --source all --profile-only --headless
+```
+
+Открывает профиль и сохраняет только его данные: подписчиков, био, окно «Об этом профиле»,
+шапку (темы, ссылки, просмотры), связь с Instagram, страну/город. Лента не прокручивается,
+ветки не читаются и не пишутся, вторая вкладка не открывается. Забаненные профили
+пропускаются. Несовместим с `--threads-only` и `--fill-threads`; `--since`, `--limit`,
+`--full`, `--stop-after` и флаги про содержимое ветки игнорируются с предупреждением.
+В `profile_runs` пишется `mode='profile'`, колонки `posts_*` нулевые.
 
 ### Быстрый сбор веток: `--threads-only`
 
