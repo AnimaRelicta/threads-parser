@@ -7,6 +7,7 @@
     uv run scripts/run.py olx_vetka_astana --threads-only --since 7d   # только список веток
     uv run scripts/run.py olx_vetka_astana --fill-threads --since 7d --comments   # разбор этих веток
     uv run scripts/run.py --source new --threads-only --since 7d       # профили без веток
+    uv run scripts/run.py --source new --threads-only --only-class 1,2  # только барахолки и продавцы
     uv run scripts/run.py olx_vetka_astana --profile-only              # только метаданные профиля
     uv run scripts/run.py --source all --profile-only --headless       # то же для всех профилей из БД
     uv run scripts/run.py --comments --depth 3 --accounts account_001,account_002 --workers 2
@@ -17,6 +18,7 @@ import argparse
 import sys
 
 from config import DEFAULT_LIMIT, ENV_FILE, load_settings
+from core.spamclass import parse_classes
 from scrape.dispatch import run
 
 
@@ -53,6 +55,14 @@ def build_parser(st) -> argparse.ArgumentParser:
         help="откуда взять профили из БД: all (is_target), new (ещё без веток), "
         "search, authors (найдены discover.py) или ники через запятую; "
         "добавляется к профилю из командной строки и к --file",
+    )
+    ap.add_argument(
+        "--only-class",
+        metavar="КЛАССЫ",
+        help="брать только профили этих спам-классов: 1,2,3 или board_author,seller,spammer. "
+        "Класс уже посчитан: берётся из БД, чужой профиль даже не открывается. Не считан: "
+        "читаются первые SPAM_CLASS_SAMPLE (10) веток, по ним считается класс и решается, "
+        "брать ли профиль (ветки чужого класса не сохраняются)",
     )
     ap.add_argument(
         "--accounts",
@@ -178,7 +188,14 @@ THREADS_ONLY_IGNORED = (
 
 
 # --profile-only ещё и не читает ленту: период, лимит и остановка по якорю не применяются
-PROFILE_ONLY_IGNORED = (*THREADS_ONLY_IGNORED, "--since", "--limit", "--full", "--stop-after")
+PROFILE_ONLY_IGNORED = (
+    *THREADS_ONLY_IGNORED,
+    "--since",
+    "--limit",
+    "--full",
+    "--stop-after",
+    "--only-class",
+)
 
 
 def warn_ignored_flags(argv: list[str], flags: tuple[str, ...], mode: str) -> None:
@@ -197,6 +214,11 @@ def main() -> None:
         raise SystemExit(
             "--threads-only, --fill-threads и --profile-only несовместимы: это разные режимы"
         )
+    if args.only_class:
+        try:
+            args.only_class = parse_classes(args.only_class)
+        except ValueError as e:
+            raise SystemExit(f"--only-class: {e}") from e
     if args.limit is None:  # ни флага, ни LIMIT в .env
         args.limit = 0 if args.fill_threads else DEFAULT_LIMIT
     if not args.username and not args.file and not args.source:

@@ -14,6 +14,7 @@ from core.logs import log
 from core.timeutil import iso, parse_dt
 from db.profiles import ProfileStore
 from scrape.anchor import DEFAULT_STOP_AFTER, anchor_covers, compute_anchor
+from scrape.classgate import gate_feed, precheck, skip
 from scrape.consts import OLD_STREAK_STOP, PINNED_LOOKAHEAD
 from scrape.entry import open_profile
 from scrape.feed import Lookahead, iter_post_links
@@ -68,6 +69,9 @@ async def run_profile(
         log(f"[BAN] @{username} уже забанен: {ban}")
         result.update(status="banned", note=f"в бане: {ban}")
         return result
+    wanted = getattr(args, "only_class", None)
+    if wanted and (gate := await precheck(store, pid, wanted)) and not gate.keep:
+        return skip(result, gate, username)  # класс известен и чужой: страницу не открываем
 
     feed, fail = await open_profile(grid_page, net, username, pid, store)
     if fail:
@@ -78,6 +82,10 @@ async def run_profile(
     if verdict.is_spam and await store.banned_reason(pid):
         result.update(status="banned", stop_reason="spam", note=verdict.reason)
         return result
+    if wanted:
+        gate = await gate_feed(grid_page, net, feed, store, pid, username, wanted)
+        if not gate.keep:
+            return skip(result, gate, username)
 
     # Якорь: после первого прохода по окну лежит в profile_anchors; дальше обход
     # останавливается после N подряд известных постов (--full его игнорирует)

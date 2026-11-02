@@ -12,13 +12,13 @@ from browser.net import Net
 from core.logs import log
 from core.timeutil import iso
 from db.profiles import ProfileStore
-from scrape.consts import OLD_STREAK_STOP, PINNED_LOOKAHEAD
+from scrape.classgate import gate_feed, precheck, skip
+from scrape.consts import NO_DATA_WAIT_MS, OLD_STREAK_STOP, PINNED_LOOKAHEAD
 from scrape.entry import open_profile
 from scrape.feed import Lookahead, iter_post_links
 from scrape.spamcheck import check_feed
 
 FLUSH_EVERY = 10  # сколько веток копим перед записью в БД
-NO_DATA_WAIT_MS = 1500  # ждём JSON ленты, если ссылка уже есть, а данных ещё нет
 
 
 async def run_threads(grid_page, net: Net, username: str, args, store: ProfileStore) -> dict:
@@ -43,6 +43,9 @@ async def run_threads(grid_page, net: Net, username: str, args, store: ProfileSt
         log(f"[BAN] @{username} уже забанен: {ban}")
         result.update(status="banned", note=f"в бане: {ban}")
         return result
+    wanted = getattr(args, "only_class", None)
+    if wanted and (gate := await precheck(store, pid, wanted)) and not gate.keep:
+        return skip(result, gate, username)  # класс известен и чужой: страницу не открываем
     feed, fail = await open_profile(grid_page, net, username, pid, store)
     if fail:
         result.update(fail)
@@ -52,6 +55,10 @@ async def run_threads(grid_page, net: Net, username: str, args, store: ProfileSt
     if verdict.is_spam and await store.banned_reason(pid):
         result.update(status="banned", stop_reason="spam", note=verdict.reason)
         return result
+    if wanted:
+        gate = await gate_feed(grid_page, net, feed, store, pid, username, wanted)
+        if not gate.keep:
+            return skip(result, gate, username)
 
     full = bool(getattr(args, "full", False))
     stop_after = 0 if full else max(1, getattr(args, "stop_after", 1))

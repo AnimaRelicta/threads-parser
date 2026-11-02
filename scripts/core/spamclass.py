@@ -37,6 +37,22 @@ CLASS_TITLES = {
 }
 
 
+def parse_classes(value: str) -> frozenset[int]:
+    """«1,3» или «board_author,spammer» -> {1, 3}; ValueError на незнакомом классе."""
+    by_name = {name: code for code, name in CLASS_NAMES.items()}
+    out = set()
+    for part in value.replace(" ", "").split(","):
+        if not part:
+            continue
+        code = by_name.get(part.lower()) or (int(part) if part.isdigit() else 0)
+        if code not in CLASS_NAMES:
+            raise ValueError(f"«{part}»: нужны 1, 2, 3 или {', '.join(by_name)}")
+        out.add(code)
+    if not out:
+        raise ValueError("пустой список классов")
+    return frozenset(out)
+
+
 @dataclass(frozen=True)
 class ClassRules:
     sample: int = 10  # сколько самых свежих веток берём в выборку

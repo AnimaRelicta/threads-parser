@@ -40,3 +40,4 @@ REPLIES_WAIT_MS = 6000  # сколько ждём запрос подгрузк�
 
 
 BLOCKED_RESOURCES = {"image", "media", "font"}
+NO_DATA_WAIT_MS = 1500  # ждём JSON ленты, если ссылка уже есть, а данных ещё нет

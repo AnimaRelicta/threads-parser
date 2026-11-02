@@ -343,6 +343,11 @@ def run(args, st: Settings) -> None:
             f"[*] Берём {'ветки' if mode in ('threads', 'fill') else 'посты'} "
             f"не старше {args.cutoff:%Y-%m-%d %H:%M} UTC"
         )
+    if getattr(args, "only_class", None) and mode != "profile":
+        log(
+            f"[*] --only-class {','.join(map(str, sorted(args.only_class)))}: профили других "
+            "классов пропускаются, у ещё не проверенных класс считается по первым веткам"
+        )
     if getattr(args, "full", False) and mode != "profile":
         log("[*] --full: якорь игнорируется, полный проход по окну")
     if args.comments and mode in ("full", "fill"):
@@ -367,6 +372,7 @@ def run(args, st: Settings) -> None:
         "with_videos": bool(args.with_videos),
         "headless": bool(args.headless),
         "mode": mode,
+        "only_class": sorted(args.only_class) if getattr(args, "only_class", None) else None,
     }
     run_id = run_sync(st, lambda conn: start_run(conn, "profiles", run_settings))
     interrupted = False

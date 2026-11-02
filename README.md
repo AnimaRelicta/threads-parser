@@ -161,6 +161,7 @@ approved-постов и состояние очереди `search_jobs`. CSV н
 | `about.py` | Окно «···» → «Об этом профиле»: имя, дата регистрации, местоположение (один раз на профиль, `profiles.about_*`, миграция 009). | `fetch_about` |
 | `header.py` | Шапка профиля из DOM без кликов: темы (чипы), ссылки в био (Telegram, WhatsApp, Instagram), «недавние просмотры» (`profiles.topics/links/recent_views`, миграция 010). | `read_header` |
 | `instagram.py` | Связь профиля с Instagram при открытии: ссылка в шапке > JSON страницы > био > догадка по нику (`instagram_links`, догадка помечена `guessed`). | `resolve_instagram` |
+| `classgate.py` | Отбор профилей по классу 1/2/3 (`--only-class`): класс из БД до открытия профиля или детекция по первым веткам ленты. | `precheck`, `gate_feed`, `gate_db`, `skip` |
 | `fill.py` | Разбор веток, собранных быстрым режимом (`--fill-threads`): ветки берутся из БД, не из ленты. | `run_fill` |
 | `profile.py` | Обработка одного профиля (полный проход: ветки, посты под ветками, медиа). | `run_profile` |
 | `profile_only.py` | Только метаданные профиля без обхода ленты и веток (`--profile-only`). | `run_profile_only` |
@@ -302,8 +303,34 @@ uv run scripts/run.py --accounts account_001,account_002 --workers 2 --since 1m 
 
 Флаги: `--file`, `--accounts`, `--workers`, `--since` (30d, 4w, 1m, 1y или дата), `--limit`,
 `--comments`, `--depth`, `--max-comments`, `--recheck-days`, `--full-rescan`, `--full`,
-`--stop-after`, `--threads-only`, `--fill-threads`, `--profile-only`, `--source`, `--with-videos`, `--no-block`, `--delay`, `--profile-delay`, `--headless`,
+`--stop-after`, `--threads-only`, `--fill-threads`, `--profile-only`, `--only-class`, `--source`, `--with-videos`, `--no-block`, `--delay`, `--profile-delay`, `--headless`,
 `--debug`, `--output`. Справка: `uv run scripts/run.py -h`.
+
+### Только нужный класс профилей: `--only-class`
+
+```bash
+uv run scripts/run.py --source new --threads-only --only-class 1,2 --since 7d
+uv run scripts/run.py --source all --only-class board_author --comments
+uv run scripts/run.py --fill-threads --source all --only-class 1
+```
+
+Работает в полном проходе, `--threads-only` и `--fill-threads`. Классы: `1` барахолка
+(`board_author`), `2` продавец (`seller`), `3` спамер (`spammer`); пороги — `SPAM_CLASS_*`.
+Решение по профилю:
+
+1. Класс уже считали (`profiles.spam_class_at` не пуст): он берётся из БД. Чужой класс (или
+   «класса нет») — профиль пропускается до открытия страницы, браузер не тратится.
+2. Класса ещё нет: профиль открывается, из ленты читаются первые `SPAM_CLASS_SAMPLE` (10) веток
+   без открытия и без записи в `posts`, по ним считается класс и сохраняется в профиль. Класс
+   подходит: обход идёт как обычно, эти ветки сохраняются. Не подходит: ветки не пишутся
+   вовсе, остаётся только метка класса, и следующий запуск остановится на шаге 1.
+3. `--fill-threads` браузера не использует: класс считается по веткам, уже лежащим в `posts`.
+
+Пропущенный профиль получает в `profile_runs` статус `skipped`, `stop_reason='class'`
+и причину в `note`. Если веток слишком мало для класса (меньше 5), профиль тоже пропускается, но
+метка не пишется и детекция повторится при следующем запуске. Класс не пересчитывается
+для уже проверенных профилей, пока они пропускаются: пересчитать классы по веткам из БД
+можно `uv run scripts/spam.py --check --apply` или обнулить `spam_class_at`. В `--profile-only` флаг игнорируется.
 
 ### Только профиль: `--profile-only`
 
@@ -441,6 +468,7 @@ uv run scripts/cli.py spam --check --apply            # записать кла�
 uv run scripts/cli.py spam --classes                  # профили с классом, итог по классам
 uv run scripts/cli.py spam --classes --class-code 3   # только класс 3
 uv run python tests/spamclass_check.py                # проверка правил без БД
+uv run python tests/classgate_check.py                # проверка отбора --only-class без БД
 ```
 
 ### Разбор собранных веток: `--fill-threads` и выбор профилей `--source`

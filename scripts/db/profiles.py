@@ -182,6 +182,16 @@ class ProfileStore:
         async with self.pool.acquire() as conn:
             return await spam_repo.save_verdict(conn, profile_id, verdict)
 
+    async def class_state(self, profile_id: int) -> tuple[int | None, datetime | None]:
+        """(класс, когда считали); время None = класс ещё не считали."""
+        async with self.pool.acquire() as conn:
+            return await spam_repo.class_state(conn, profile_id)
+
+    async def detect_class_db(self, profile_id: int) -> ClassVerdict:
+        """Класс по веткам из БД с записью метки (мало веток: метка не пишется)."""
+        async with self.pool.acquire() as conn:
+            return await spam_repo.check_class(conn, profile_id, True, self.class_rules)
+
     async def save_spam_class(self, profile_id: int, verdict: ClassVerdict) -> None:
         """Записывает класс профиля (1/2/3 или NULL); при нехватке данных ничего не пишет."""
         async with self.pool.acquire() as conn:

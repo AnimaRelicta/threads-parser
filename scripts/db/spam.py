@@ -1,5 +1,7 @@
 """Спам-проверка профилей в БД: выборка веток, запись вердикта и бана, разбан."""
 
+from datetime import datetime
+
 import asyncpg
 
 from config import Settings
@@ -141,6 +143,19 @@ async def check_class(
     if apply:
         await save_class(conn, profile_id, cv)
     return cv
+
+
+async def class_state(
+    conn: asyncpg.Connection, profile_id: int
+) -> tuple[int | None, datetime | None]:
+    """(класс, когда считали): время пусто = класс ещё ни разу не считали."""
+    try:
+        row = await conn.fetchrow(
+            "SELECT spam_class, spam_class_at FROM profiles WHERE id = $1", profile_id
+        )
+    except asyncpg.UndefinedColumnError as e:
+        raise _missing_migration(e) from e
+    return (row["spam_class"], row["spam_class_at"]) if row else (None, None)
 
 
 async def unban(conn: asyncpg.Connection, username: str) -> bool:
