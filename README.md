@@ -20,6 +20,7 @@ threads-parser/
 │   ├── geo.py         # CLI: страна/город профилей КЗ/УЗ (rescan/stats/list, БД, без браузера)
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
 │   ├── dbadmin.py     # CLI: Postgres (migrate/status/import-accounts/import-profiles/import-search)
+│   ├── export.py      # CLI: выгрузка из БД в xlsx (базовые и свои запросы)
 │   ├── spam.py        # CLI: спам-профили (проверка по БД, классы 1/2/3, список банов, разбан)
 │   ├── classify/      # пакет: категории профилей через LLM (запуск: cli.py classify)
 │   ├── core/  db/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
@@ -366,6 +367,40 @@ uv run scripts/cli.py spam --check adina.rahatt       # один профиль,
 uv run scripts/cli.py spam --list                     # кто в бане и почему
 uv run scripts/cli.py spam --unban adina.rahatt       # снять бан и больше не банить
 ```
+
+### Выгрузка из БД в xlsx: `export.py`, `exporter/`
+
+| Модуль | Назначение |
+|---|---|
+| `export.py` | CLI: выбор запросов, `--since`, `--limit`, `--out`; один запрос = один лист. |
+| `exporter/queries.py` | Базовые запросы (`BASE_QUERIES`): добавить свой = добавить запись в словарь. |
+| `exporter/sqlfile.py` | Разбор файла своих запросов, подстановка `:since` и `:limit`. |
+| `exporter/xlsx.py` | Запись книги: шапка, фильтр, ширина колонок; JSON, списки и даты приводятся к ячейкам. |
+
+Запросы идут в read-only транзакции Postgres: `INSERT`/`UPDATE`/`DELETE`/DDL завершатся ошибкой, данные не изменятся. Времена в файле в UTC. Текст, начинающийся с `=`, записывается как текст, а не как формула.
+
+Базовые запросы (`--list`): `spam-classes`, `banned`, `profiles`, `threads`, `top-authors`, `instagram`. Смысл `--since` у каждого указан в `--list`.
+
+**Свои запросы** лежат в `data/export_queries.sql` (путь: `EXPORT_QUERIES_FILE` или `--queries-file`):
+
+```sql
+-- name: my-query
+-- desc: что выгружает
+SELECT username, followers_count FROM profiles WHERE followers_count < 100 LIMIT :limit;
+```
+
+В тексте доступны `:since` (дата или NULL) и `:limit` (число или NULL). Имя совпало с базовым: побеждает файл. Разово: `--sql "SELECT ..."` или `--file запрос.sql`.
+
+```bash
+uv run scripts/cli.py export --list                              # что можно выгрузить
+uv run scripts/cli.py export spam-classes                        # data/export/spam-classes_ДАТА.xlsx
+uv run scripts/cli.py export spam-classes banned --since 7d      # два листа в одном файле
+uv run scripts/cli.py export top-authors --since 1m --limit 500 --out data/export/top.xlsx
+uv run scripts/cli.py export my-query --out D:\work\reports\   # в папку, имя файла автоматически
+uv run scripts/cli.py export --sql "SELECT username FROM profiles WHERE is_banned" --sheet bans
+```
+
+Нужен пакет `openpyxl` (в `pyproject.toml`; `uv run` подтянет его сам).
 
 ### Классы спам-профилей: `core/spamclass.py`
 

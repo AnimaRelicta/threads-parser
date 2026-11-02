@@ -39,6 +39,7 @@ class Settings:
     # аккаунты хранит в Postgres и этот файл не читает.
     accounts_file: Path = ROOT / "data" / "accounts.json"
     export_dir: Path = ROOT / "data" / "export"
+    export_queries_file: Path = ROOT / "data" / "export_queries.sql"  # EXPORT_QUERIES_FILE
     output_dir: Path = ROOT / "data" / "output"
     # --- scripts/search.py: поиск по выдаче Threads --------------------------
     search_queries_file: Path = ROOT / "data" / "threads_queries.txt"
@@ -143,6 +144,7 @@ def load_settings() -> Settings:
         cookies_dir=_path(get("COOKIES_DIR"), ROOT / "data" / "cookies"),
         accounts_file=_path(get("ACCOUNTS_FILE"), ROOT / "data" / "accounts.json"),
         export_dir=_path(get("EXPORT_DIR"), ROOT / "data" / "export"),
+        export_queries_file=_path(get("EXPORT_QUERIES_FILE"), ROOT / "data" / "export_queries.sql"),
         output_dir=_path(get("OUTPUT_DIR"), ROOT / "data" / "output"),
         search_queries_file=_path(
             get("SEARCH_QUERIES_FILE"), ROOT / "data" / "threads_queries.txt"

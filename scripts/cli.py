@@ -7,6 +7,7 @@
     uv run scripts/cli.py discover --since 7d --dry-run   # новые профили по авторам
     uv run scripts/cli.py geo stats               # где находятся профили (КЗ/УЗ)
     uv run scripts/cli.py spam --check            # найти спам-профили (без --apply не банит)
+    uv run scripts/cli.py export spam-classes --since 7d   # выгрузка из БД в xlsx
     uv run scripts/cli.py classify --limit 50      # категории профилей через LLM
     uv run scripts/cli.py accounts check --headless
     uv run scripts/cli.py db migrate          # схема Postgres
@@ -26,6 +27,7 @@ COMMANDS = {
     "instagram": ("instagram", "связь Threads ↔ Instagram: stats, list, --csv (instagram.py)"),
     "geo": ("geo", "страна/город профилей (КЗ, УЗ): rescan, stats, list (geo.py)"),
     "spam": ("spam", "спам-профили: проверка по БД, список банов, разбан (spam.py)"),
+    "export": ("export", "выгрузка из БД в xlsx: базовые и свои запросы (export.py)"),
     "classify": ("classify.cli", "категории профилей через LLM (classify/cli.py)"),
     "accounts": ("accounts", "аккаунты: add, list, relogin, check, export, import (accounts.py)"),
     "db": ("dbadmin", "база Postgres: migrate, status (dbadmin.py)"),
