@@ -78,10 +78,11 @@ uv run scripts/cli.py parse --help                                  # справ
 | `pool.py` | Подключение: пул asyncpg, разовые запросы из синхронного кода. | `SCHEMA`, `DB_ERRORS`, `require_url`, `create_pool`, `connect`, `connection`, `run_sync` |
 | `migrate.py` | Миграции `db/migrations/*.sql` по порядку, учёт в `schema_migrations`. | `list_migrations`, `migrate`, `status` |
 | `accounts.py` | Таблица `accounts`: чтение, вход, обновление, итог запуска, импорт старого реестра. | `fetch_accounts`, `register_login`, `update_account`, `mark_run`, `import_legacy` |
-| `posts.py` | Посты, комментарии, медиа, якоря и пропущенные посты профиля: запись и чтение в прежнем формате словарей. | `save_post`, `load_profile_posts`, `mark_skipped`, `save_anchor`, `save_meta`, `upsert_topic` |
+| `posts.py` | Посты, комментарии, медиа, якоря и пропущенные посты профиля: запись и чтение в прежнем формате словарей. | `save_post`, `load_profile_posts`, `mark_skipped`, `save_anchor`, `about_fetched`, `upsert_topic` |
+| `profile_data.py` | Данные профиля одним вызовом: страница, «Об этом профиле», шапка, `instagram_links` (одна транзакция), затем геосигналы `location_mentions` по строке из `RETURNING`. | `save_profile_data` |
 | `profiles.py` | Хранилище профильного пайплайна поверх пула: общий для воркеров запуска. | `ProfileStore`, `ProfileState` |
 | `search.py` | Поиск: очередь `search_jobs`, найденные посты, связи `post_hits`, пересчёт фильтра. | `ensure_job`, `start_job`, `finish_job`, `save_hits`, `refilter` |
-| `geo.py` | Локации (`location_mentions`, `profiles.about_country`): запись при сборе профиля и поста, пересчёт `rescan`, выборки для CLI. | `save_profile_geo`, `save_post_mentions`, `rescan`, `load_profile_geo` |
+| `geo.py` | Локации (`location_mentions`, `profiles.about_country`): запись при сборе профиля и поста, пересчёт `rescan`, выборки для CLI. | `save_geo`, `save_post_mentions`, `rescan`, `load_profile_geo` |
 | `legacy.py` | Разовый перенос старых файлов (posts.json профилей, posts.jsonl и jobs.json поиска). | `normalize_post`, `import_profiles`, `import_search` |
 | `runs.py` | Запуски: `runs`, `run_accounts`, `profile_runs`. | `start_run`, `finalize_run`, `finish_run`, `save_profile_runs`, `ensure_profile` |
 | `discovery.py` | Новые профили по авторам: кандидаты из `comments.author` и `posts.author_username`, вставка в `profiles`. | `find_candidates`, `insert_candidates`, `discover_authors` |

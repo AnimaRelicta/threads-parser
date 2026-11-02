@@ -8,11 +8,12 @@ import asyncpg
 
 from core.consts import USERNAME_RE
 from core.fsio import normalize_username
+from core.geo import Resolved
 from core.spam import RULES, SpamRules, Verdict
 from core.spamclass import CLASS_RULES, ClassRules, ClassVerdict
-from db import geo as geo_repo
 from db import posts as repo
 from db import spam as spam_repo
+from db.profile_data import save_profile_data
 from db.runs import ensure_profile
 
 SOURCE_SQL = {
@@ -123,26 +124,12 @@ class ProfileStore:
                 anchor=await repo.load_anchor(conn, pid),
             )
 
-    async def save_meta(self, profile_id: int, meta: dict) -> None:
+    async def save_profile_data(
+        self, profile_id: int, meta: dict, about=None, header=None, link=None
+    ) -> Resolved:
+        """Данные профиля одной записью (страница, about, шапка, Instagram) + геосигналы."""
         async with self.pool.acquire() as conn:
-            await repo.save_meta(conn, profile_id, meta)
-
-    async def save_about(self, profile_id: int, about) -> None:
-        async with self.pool.acquire() as conn:
-            await repo.save_about(conn, profile_id, about)
-
-    async def save_header(self, profile_id: int, header) -> None:
-        async with self.pool.acquire() as conn:
-            await repo.save_header(conn, profile_id, header)
-
-    async def save_instagram(self, profile_id: int, link) -> None:
-        async with self.pool.acquire() as conn:
-            await repo.save_instagram(conn, profile_id, link)
-
-    async def save_geo(self, profile_id: int):
-        """Геосигналы профиля по уже сохранённым bio/about/шапке; возвращает core.geo.Resolved."""
-        async with self.pool.acquire() as conn:
-            return await geo_repo.save_profile_geo(conn, profile_id)
+            return await save_profile_data(conn, profile_id, meta, about, header, link)
 
     async def about_fetched(self, profile_id: int) -> bool:
         async with self.pool.acquire() as conn:

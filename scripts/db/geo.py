@@ -71,11 +71,11 @@ async def _write_profile(conn: asyncpg.Connection, row, replace: bool) -> int:
     return len(rows)
 
 
-async def save_profile_geo(conn: asyncpg.Connection, profile_id: int) -> Resolved:
-    """Геосигналы профиля из его полей в БД (bio, about, шапка); без запросов к Threads."""
-    row = await conn.fetchrow(f"SELECT {PROFILE_COLS} FROM profiles WHERE id = $1", profile_id)
-    if row is None:
-        return Resolved()
+async def save_geo(conn: asyncpg.Connection, row) -> Resolved:
+    """Геосигналы профиля по строке с колонками PROFILE_COLS (bio, about, шапка).
+
+    Без запросов к Threads и без повторного чтения профиля: строку отдаёт UPDATE ... RETURNING
+    в `db/profile_data.py`."""
     await _write_profile(conn, row, replace=False)
     return resolve(_signals_of(row))
 

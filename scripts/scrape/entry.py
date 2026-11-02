@@ -72,23 +72,19 @@ async def open_profile(
     except Exception:
         pass
 
-    await store.save_meta(profile_id, meta)
-
     # «···» → «Об этом профиле»: имя, дата регистрации, местоположение. Один раз на профиль
     # (about_fetched_at); не вышло — не фатально, повторится при следующем проходе.
+    about = None
     if await store.about_fetched(profile_id):
         about_note = "уже собран"
     else:
         about = await fetch_about(grid_page, meta["url"])
-        if about:
-            await store.save_about(profile_id, about)
-            about_note = f"собран, место: {about.location or 'не указано'}"
-        else:
-            about_note = "НЕ удалось собрать"
+        about_note = (
+            f"собран, место: {about.location or 'не указано'}" if about else "НЕ удалось собрать"
+        )
     # Шапка: темы, ссылки в био, недавние просмотры (без кликов, при каждом заходе: просмотры меняются)
     header = await read_header(grid_page)
     if header:
-        await store.save_header(profile_id, header)
         header_note = (
             f"просмотров: {header.recent_views if header.recent_views is not None else '?'}, "
             f"тем: {len(header.topics)}, ссылок: {len(header.links)}"
@@ -97,19 +93,15 @@ async def open_profile(
         header_note = "шапка пустая"
     # Instagram: шапка > JSON страницы > био > догадка по нику (догадка помечена guessed)
     ig = await resolve_instagram(grid_page, header, meta.get("bio"), username)
-    await store.save_instagram(profile_id, ig)
-    # Страна/город: about_location > телефон WhatsApp > био/имя/темы. Только по уже собранному,
-    # без запросов к Threads; сбой не должен ронять обход профиля.
-    try:
-        geo = await store.save_geo(profile_id)
-        geo_note = (
-            f"{geo.country}{' ' + geo.city if geo.city else ''} ({geo.source})"
-            f"{' КОНФЛИКТ' if geo.conflict else ''}"
-            if geo.country
-            else "нет данных"
-        )
-    except Exception as e:
-        geo_note = f"ошибка: {e!r}"
+    # Всё собранное пишется одним вызовом; страна/город считаются там же: about_location >
+    # телефон WhatsApp > био/имя/темы, без запросов к Threads, сбой гео обход не роняет.
+    geo = await store.save_profile_data(profile_id, meta, about, header, ig)
+    geo_note = (
+        f"{geo.country}{' ' + geo.city if geo.city else ''} ({geo.source})"
+        f"{' КОНФЛИКТ' if geo.conflict else ''}"
+        if geo.country
+        else "нет данных"
+    )
     log(
         f"[+] {meta.get('og_title') or meta.get('title')}"
         f" | подписчиков: {meta['followers'] if meta['followers'] is not None else '?'}"

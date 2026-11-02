@@ -10,7 +10,6 @@ from pathlib import Path
 import asyncpg
 
 from config import TH
-from core.instagram import DETECTOR_VERSION
 from core.logs import log
 from core.textfilter import FILTER_VERSION, classify, hashtags_mentions
 from core.timeutil import iso, parse_dt
@@ -344,87 +343,6 @@ async def save_anchor(conn: asyncpg.Connection, profile_id: int, anchor: dict) -
         parse_dt(anchor.get("newest_date")),
         parse_dt(anchor.get("covered_from")),
         anchor.get("known_posts") or 0,
-    )
-
-
-async def save_meta(conn: asyncpg.Connection, profile_id: int, meta: dict) -> None:
-    """Метаданные профиля со страницы (замена profile.json)."""
-    await conn.execute(
-        """
-        UPDATE profiles SET
-            url = coalesce($2, url), title = $3, og_title = $4,
-            og_description = $5, og_image = $6,
-            followers_count = coalesce($7, followers_count),
-            bio = coalesce($8, bio)
-        WHERE id = $1
-        """,
-        profile_id,
-        meta.get("url"),
-        meta.get("title"),
-        meta.get("og_title"),
-        meta.get("og_description"),
-        meta.get("og_image"),
-        meta.get("followers"),
-        meta.get("bio"),
-    )
-
-
-async def save_about(conn: asyncpg.Connection, profile_id: int, about) -> None:
-    """Окно «Об этом профиле» (core.about.About): имя, дата регистрации, местоположение, все строки."""
-    await conn.execute(
-        """
-        UPDATE profiles SET about_name = $2, about_joined = $3, about_location = $4,
-            about_raw = $5, about_fetched_at = now()
-        WHERE id = $1
-        """,
-        profile_id,
-        about.name,
-        about.joined,
-        about.location,
-        about.raw,
-    )
-
-
-async def save_header(conn: asyncpg.Connection, profile_id: int, header) -> None:
-    """Шапка профиля (core.header.Header): просмотры, темы, ссылки."""
-    await conn.execute(
-        """
-        UPDATE profiles SET recent_views = coalesce($2, recent_views),
-            topics = $3, links = $4, header_fetched_at = now()
-        WHERE id = $1
-        """,
-        profile_id,
-        header.recent_views,
-        header.topics,
-        header.links,
-    )
-
-
-# Приоритет источников: ссылка в шапке > JSON страницы > догадка по нику. Слабый источник
-# не затирает более сильный (догадка не перезаписывает подтверждённую связь).
-_IG_RANK = "CASE {} WHEN 'header_link' THEN 3 WHEN 'threads_json' THEN 2 ELSE 1 END"
-SAVE_INSTAGRAM_SQL = f"""
-INSERT INTO instagram_links
-    (profile_id, instagram_username, source, confidence, matched_raw, detector_version)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (profile_id) DO UPDATE SET
-    instagram_username = EXCLUDED.instagram_username, source = EXCLUDED.source,
-    confidence = EXCLUDED.confidence, matched_raw = EXCLUDED.matched_raw,
-    detector_version = EXCLUDED.detector_version, updated_at = now()
-WHERE {_IG_RANK.format("EXCLUDED.source")} >= {_IG_RANK.format("instagram_links.source")}
-"""
-
-
-async def save_instagram(conn: asyncpg.Connection, profile_id: int, link) -> None:
-    """Связь профиля с Instagram (core.instagram.IgLink); слабый источник сильный не затирает."""
-    await conn.execute(
-        SAVE_INSTAGRAM_SQL,
-        profile_id,
-        link.username,
-        link.source,
-        link.confidence,
-        link.matched_raw,
-        DETECTOR_VERSION,
     )
 
 

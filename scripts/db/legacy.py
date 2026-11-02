@@ -10,6 +10,7 @@ from core.fsio import read_json, read_jsonl
 from core.timeutil import parse_dt
 from db import posts as repo
 from db import search as search_repo
+from db.profile_data import save_profile_data
 from db.runs import ensure_profile
 
 # Старые posts.json хранили shortcode/caption/comments_count; приводим к code/text/reply_count
@@ -35,7 +36,7 @@ async def import_profile_dir(conn: asyncpg.Connection, d: Path, root: Path) -> d
 
     meta = read_json(d / "profile.json", None)
     if isinstance(meta, dict):
-        await repo.save_meta(conn, pid, meta)
+        await save_profile_data(conn, pid, meta)
 
     have = {
         r["code"]
