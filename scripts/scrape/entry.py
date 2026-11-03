@@ -6,7 +6,7 @@
 from browser.net import Net
 from config import TH
 from core.biography import biography_from_json
-from core.followers import followers_from_json, followers_from_og
+from core.followers import followers_from_json, followers_from_og, threads_from_og
 from core.logs import log
 from db.profiles import ProfileStore
 from scrape.about import fetch_about
@@ -14,6 +14,7 @@ from scrape.extract import read_embedded
 from scrape.harvest import FeedIndex
 from scrape.header import read_header
 from scrape.instagram import resolve_instagram
+from scrape.page import wait_profile_ready
 
 META_JS = """() => ({
     title: document.title,
@@ -33,7 +34,7 @@ async def open_profile(
     """
     net.grid_captured.clear()
     resp = await grid_page.goto(f"{TH}/@{username}", wait_until="domcontentloaded")
-    await grid_page.wait_for_timeout(3000)
+    await wait_profile_ready(grid_page)
     if "/login" in grid_page.url:
         return None, {
             "status": "abort",
@@ -52,6 +53,7 @@ async def open_profile(
     meta = await grid_page.evaluate(META_JS)
     meta.update({"username": username, "url": f"{TH}/@{username}"})
     meta["followers"] = followers_from_og(meta.get("og_description"))
+    meta["threads"] = threads_from_og(meta.get("og_description"))
     if meta["followers"] is None:  # запасной путь: JSON страницы
         try:
             scripts = await grid_page.eval_on_selector_all(

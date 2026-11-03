@@ -251,3 +251,82 @@ def resolve(signals: list[Signal]) -> Resolved:
                 res.city = city
                 break
     return res
+
+
+# --- Локация из текста профиля (profiles.text_location) --------------------------------
+# Отдельная колонка: ищем город/страну в названии профиля, описании, био и (по флагу) в ветках.
+# В итоговую страну (resolve) это не входит и about_location не заменяет: служит подсказкой там,
+# где «Об этом профиле» собрать не удалось.
+
+TEXT_SOURCES = ("title", "name", "bio", "description", "threads")
+DEFAULT_TEXT_SOURCES = ("title", "name", "bio", "description")  # ветки только по флагу
+TEXT_THREAD_PLACES = 3  # сколько самых частых мест из веток брать (источник threads)
+
+_TITLE_TAIL = re.compile(r"\s*\(@[\w.]+\)\s*•.*$", re.S)  # « (@ник) • Threads — …»
+_DESC_HEAD = re.compile(  # «353 подписчика • 169 веток • » перед текстом био
+    r"^\s*[^•]*?(?:подписчик\w*|followers?)\s*•\s*[^•]*?(?:веток|ветк\w*|threads?)\s*•\s*", re.I
+)
+_DESC_TAIL = re.compile(r"\.?\s*(?:Посмотреть последние|See the latest)\S*.*$", re.I | re.S)
+
+
+def parse_text_sources(value: str | None) -> tuple[str, ...]:
+    """«title,bio,threads» -> кортеж источников в порядке TEXT_SOURCES. Пусто = по умолчанию.
+
+    Неизвестное имя — ValueError (опечатка в .env не должна молча отключать источник)."""
+    names = [x.strip().lower() for x in (value or "").replace(";", ",").split(",") if x.strip()]
+    if not names:
+        return DEFAULT_TEXT_SOURCES
+    bad = [n for n in names if n not in TEXT_SOURCES]
+    if bad:
+        raise ValueError(f"неизвестные источники {bad}; допустимо: {', '.join(TEXT_SOURCES)}")
+    return tuple(s for s in TEXT_SOURCES if s in names)
+
+
+def clean_title(title: str | None) -> str | None:
+    """Название профиля без хвоста « (@ник) • Threads — …»."""
+    return _TITLE_TAIL.sub("", title or "").strip() or None
+
+
+def clean_description(og_description: str | None) -> str | None:
+    """Описание профиля без счётчиков («N подписчиков • M веток •») и «Посмотреть последние…»."""
+    s = _DESC_TAIL.sub("", _DESC_HEAD.sub("", og_description or ""))
+    return s.strip() or None
+
+
+def text_location(
+    *,
+    title: str | None = None,
+    about_name: str | None = None,
+    bio: str | None = None,
+    og_description: str | None = None,
+    thread_places: list[tuple[str, str | None, int]] | None = None,
+    sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES,
+) -> tuple[str | None, str | None]:
+    """(места, источники): «KZ Астана, UZ Ташкент» и «title,bio»; (None, None), если не нашли.
+
+    Порядок мест: название > имя из about > био > описание > ветки. Страна без города
+    отбрасывается, если та же страна уже названа городом. thread_places: [(страна, город, число
+    веток)] из location_mentions; используется только с источником threads."""
+    texts = {
+        "title": clean_title(title),
+        "name": about_name,
+        "bio": bio,
+        "description": clean_description(og_description),
+    }
+    found: dict[tuple[str, str | None], list[str]] = {}
+    for src in TEXT_SOURCES:
+        if src not in sources:
+            continue
+        if src == "threads":
+            places = [(c, ct) for c, ct, _n in (thread_places or [])[:TEXT_THREAD_PLACES]]
+        else:
+            places = [(m.country, m.city) for m in find_locations(texts[src])]
+        for key in places:
+            if src not in found.setdefault(key, []):
+                found[key].append(src)
+    with_city = {c for (c, city) in found if city}
+    keys = [k for k in found if k[1] or k[0] not in with_city]
+    if not keys:
+        return None, None
+    used = list(dict.fromkeys(s for k in keys for s in found[k]))
+    return ", ".join(f"{c} {city}" if city else c for c, city in keys), ",".join(used)

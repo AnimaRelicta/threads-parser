@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.geo import DEFAULT_TEXT_SOURCES, parse_text_sources
+
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = Path(__file__).resolve().parent / ".env"
 
@@ -29,8 +31,8 @@ class Settings:
     max_comments: int = 0
     recheck_days: int = 7
     with_videos: bool = False
-    delay: float = 4.0
-    profile_delay: float = 20.0
+    delay: float = 2.0
+    profile_delay: float = 8.0
     stop_after_known: int = 5
     debug: bool = False
     profiles_file: Path = ROOT / "data" / "threads_profiles.txt"
@@ -57,6 +59,8 @@ class Settings:
     llm_sample_threads: int = 10  # сколько последних веток профиля идёт в контекст
 
     # --- спам-детектор (core/spam.py) ----------------------------------------
+    # откуда брать profiles.text_location: title,name,bio,description,threads (TEXT_GEO_SOURCES)
+    text_geo_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES
     spam_min_followers: int = 1000  # SPAM_MIN_FOLLOWERS: столько подписчиков и больше = не спам
     # классы 1/2/3 (core/spamclass.py)
     spam_class_sample: int = 10  # SPAM_CLASS_SAMPLE: сколько первых веток идёт в детекцию
@@ -105,6 +109,13 @@ def _int(v: str | None, default: int) -> int:
         return default
 
 
+def _text_sources(v: str | None) -> tuple[str, ...]:
+    try:
+        return parse_text_sources(v)
+    except ValueError as e:
+        raise SystemExit(f"TEXT_GEO_SOURCES в {ENV_FILE}: {e}") from e
+
+
 def _float(v: str | None, default: float) -> float:
     try:
         return float(v.replace(",", ".")) if v not in (None, "") else default
@@ -136,8 +147,8 @@ def load_settings() -> Settings:
         max_comments=max(0, _int(get("MAX_COMMENTS"), 0)),
         recheck_days=max(0, _int(get("RECHECK_DAYS"), 7)),
         with_videos=_bool(get("WITH_VIDEOS"), False),
-        delay=_float(get("DELAY"), 4.0),
-        profile_delay=_float(get("PROFILE_DELAY"), 20.0),
+        delay=_float(get("DELAY"), 2.0),
+        profile_delay=_float(get("PROFILE_DELAY"), 8.0),
         stop_after_known=max(1, _int(get("STOP_AFTER_KNOWN"), 5)),
         debug=_bool(get("DEBUG"), False),
         profiles_file=_path(get("PROFILES_FILE"), ROOT / "data" / "threads_profiles.txt"),
@@ -159,6 +170,7 @@ def load_settings() -> Settings:
         llm_max_retries=max(0, _int(get("LLM_MAX_RETRIES"), 3)),
         llm_workers=max(1, _int(get("LLM_WORKERS"), 2)),
         llm_sample_threads=max(1, _int(get("LLM_SAMPLE_THREADS"), 10)),
+        text_geo_sources=_text_sources(get("TEXT_GEO_SOURCES")),
         spam_min_followers=max(0, _int(get("SPAM_MIN_FOLLOWERS"), 1000)),
         spam_class_sample=max(1, _int(get("SPAM_CLASS_SAMPLE"), 10)),
         spam_class_low_followers=max(0, _int(get("SPAM_CLASS_LOW_FOLLOWERS"), 100)),

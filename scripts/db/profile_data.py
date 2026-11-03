@@ -8,7 +8,7 @@
 
 import asyncpg
 
-from core.geo import Resolved
+from core.geo import DEFAULT_TEXT_SOURCES, Resolved
 from core.instagram import DETECTOR_VERSION as IG_VERSION
 from core.logs import log
 from db.geo import PROFILE_COLS, save_geo
@@ -27,7 +27,8 @@ UPDATE profiles SET
     recent_views = CASE WHEN $14 THEN coalesce($15, recent_views) ELSE recent_views END,
     topics = CASE WHEN $14 THEN $16::jsonb ELSE topics END,
     links = CASE WHEN $14 THEN $17::jsonb ELSE links END,
-    header_fetched_at = CASE WHEN $14 THEN now() ELSE header_fetched_at END
+    header_fetched_at = CASE WHEN $14 THEN now() ELSE header_fetched_at END,
+    threads_count = coalesce($18, threads_count)
 WHERE id = $1
 RETURNING {PROFILE_COLS}
 """
@@ -54,6 +55,7 @@ async def save_profile_data(
     about=None,
     header=None,
     link=None,
+    text_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES,
 ) -> Resolved:
     """Пишет всё, что собрано при заходе в профиль; None-блок оставляет прежние значения.
 
@@ -82,6 +84,7 @@ async def save_profile_data(
             header.recent_views if header else None,
             header.topics if header else None,
             header.links if header else None,
+            meta.get("threads"),
         )
         if row is None:
             return Resolved()
@@ -96,7 +99,7 @@ async def save_profile_data(
                 IG_VERSION,
             )
     try:
-        return await save_geo(conn, row)
+        return await save_geo(conn, row, text_sources)
     except Exception as e:  # гео не должно ронять обход профиля
         log(f"    [!] гео профиля не записано: {e!r}")
         return Resolved()

@@ -12,15 +12,16 @@
 
 import re
 
+from core.textfix import decode_json_body
+
 _BIO_RE = re.compile(r'"biography"\s*:\s*"((?:[^"\\]|\\.)*)"')
 _JSON_WINDOW = 1500
 
 
 def _unescape(s: str) -> str:
-    try:
-        return s.encode("utf-8").decode("unicode_escape").encode("latin1").decode("utf-8")
-    except (UnicodeDecodeError, UnicodeEncodeError):
-        return s
+    """Тело JSON-строки -> текст. Прежняя перекодировка через latin1 ломалась на `\\uXXXX`
+    (кириллица и эмодзи) и возвращала строку как есть, с видимыми `\\u041f...`."""
+    return decode_json_body(s)
 
 
 def biography_from_json(scripts: list[str], username: str) -> str | None:

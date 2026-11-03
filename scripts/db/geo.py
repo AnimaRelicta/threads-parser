@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import asyncpg
 
 from core.geo import (
+    DEFAULT_TEXT_SOURCES,
     DETECTOR_VERSION,
     OTHER,
     Resolved,
@@ -14,7 +15,9 @@ from core.geo import (
     post_signals,
     profile_signals,
     resolve,
+    text_location,
 )
+from core.textfix import fix_text
 
 BATCH = 500
 INSERT_SQL = """
@@ -23,7 +26,7 @@ INSERT INTO location_mentions
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING
 """  # без цели: любое нарушение location_mentions_dedup = «уже есть»
-PROFILE_COLS = "id, bio, about_name, about_location, links, topics"
+PROFILE_COLS = "id, title, og_description, bio, about_name, about_location, links, topics"
 
 
 def _json(value):
@@ -50,8 +53,37 @@ def _rows(entity_type: str, entity_id: str, profile_id: int | None, signals: lis
     ]  # fmt: skip
 
 
-async def _write_profile(conn: asyncpg.Connection, row, replace: bool) -> int:
+async def _thread_places(conn: asyncpg.Connection, profile_id: int) -> list[tuple]:
+    """Самые частые места в ветках профиля (post_text): [(страна, город, веток)]."""
+    rows = await conn.fetch(
+        "SELECT country, city, count(DISTINCT entity_id) AS n FROM location_mentions "
+        "WHERE entity_type = 'post' AND profile_id = $1 GROUP BY 1, 2 ORDER BY n DESC, 1, 2",
+        profile_id,
+    )
+    return [(r["country"], r["city"], r["n"]) for r in rows]
+
+
+async def _text_location(conn, row, sources: tuple[str, ...]) -> tuple[str | None, str | None]:
+    """Колонки profiles.text_location / text_location_src по строке профиля и набору источников."""
+    places = await _thread_places(conn, row["id"]) if "threads" in sources else None
+    return text_location(
+        title=row["title"],
+        about_name=row["about_name"],
+        bio=row["bio"],
+        og_description=row["og_description"],
+        thread_places=places,
+        sources=sources,
+    )
+
+
+async def _write_profile(
+    conn: asyncpg.Connection,
+    row,
+    replace: bool,
+    text_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES,
+) -> int:
     signals = _signals_of(row)
+    loc, loc_src = await _text_location(conn, row, text_sources)
     pid = row["id"]
     async with conn.transaction():
         if replace:
@@ -63,20 +95,25 @@ async def _write_profile(conn: asyncpg.Connection, row, replace: bool) -> int:
         if rows:
             await conn.executemany(INSERT_SQL, rows)
         await conn.execute(
-            "UPDATE profiles SET about_country = $2, geo_version = $3 WHERE id = $1",
+            "UPDATE profiles SET about_country = $2, geo_version = $3, "
+            "text_location = $4, text_location_src = $5 WHERE id = $1",
             pid,
             about_country(signals),
             DETECTOR_VERSION,
+            loc,
+            loc_src,
         )
     return len(rows)
 
 
-async def save_geo(conn: asyncpg.Connection, row) -> Resolved:
+async def save_geo(
+    conn: asyncpg.Connection, row, text_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES
+) -> Resolved:
     """Геосигналы профиля по строке с колонками PROFILE_COLS (bio, about, шапка).
 
     Без запросов к Threads и без повторного чтения профиля: строку отдаёт UPDATE ... RETURNING
     в `db/profile_data.py`."""
-    await _write_profile(conn, row, replace=False)
+    await _write_profile(conn, row, replace=False, text_sources=text_sources)
     return resolve(_signals_of(row))
 
 
@@ -99,7 +136,12 @@ class RescanResult:
     errors: list[str] = field(default_factory=list)
 
 
-async def rescan(conn: asyncpg.Connection, force: bool, log=print) -> RescanResult:
+async def rescan(
+    conn: asyncpg.Connection,
+    force: bool,
+    log=print,
+    text_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES,
+) -> RescanResult:
     """Пересчёт по накопленным данным. Строки сущности заменяются целиком (уходят и ложные
     срабатывания старой версии справочника). Без force: geo_version пуст или меньше текущей."""
     res = RescanResult()
@@ -114,7 +156,7 @@ async def rescan(conn: asyncpg.Connection, force: bool, log=print) -> RescanResu
             break
         for r in rows:
             try:
-                res.mentions += await _write_profile(conn, r, replace=True)
+                res.mentions += await _write_profile(conn, r, replace=True, text_sources=text_sources)
                 res.profiles += 1
             except Exception as e:  # один плохой профиль не останавливает пересчёт
                 res.errors.append(f"profile {r['id']}: {e!r}")
@@ -151,6 +193,76 @@ async def rescan(conn: asyncpg.Connection, force: bool, log=print) -> RescanResu
         last_code = codes[-1]
         log(f"    постов: {res.posts}")
     return res
+
+
+async def fill_text_location(
+    conn: asyncpg.Connection,
+    sources: tuple[str, ...],
+    only_empty: bool = False,
+    log=print,
+) -> tuple[int, int]:
+    """Пересчитывает только profiles.text_location по выбранным источникам (location_mentions и
+    about_country не трогает). Возвращает (профилей просмотрено, с найденной локацией)."""
+    seen = found = 0
+    last = 0
+    while True:
+        rows = await conn.fetch(
+            f"SELECT {PROFILE_COLS} FROM profiles WHERE id > $1 "
+            "AND (NOT $2 OR text_location IS NULL) ORDER BY id LIMIT $3",
+            last, only_empty, BATCH,
+        )  # fmt: skip
+        if not rows:
+            return seen, found
+        upd = []
+        for r in rows:
+            loc, src = await _text_location(conn, r, sources)
+            upd.append((r["id"], loc, src))
+            found += loc is not None
+        await conn.executemany(
+            "UPDATE profiles SET text_location = $2, text_location_src = $3 WHERE id = $1", upd
+        )
+        seen += len(rows)
+        last = rows[-1]["id"]
+        log(f"    профилей: {seen}, с локацией из текста: {found}")
+
+
+FIX_COLS = ("bio", "title", "og_title", "og_description", "about_name", "about_location")
+
+
+async def fix_encoding(
+    conn: asyncpg.Connection, apply: bool, text_sources: tuple[str, ...], log=print
+) -> tuple[int, dict[str, int]]:
+    """Находит текстовые поля профилей с неразобранными `\\uXXXX` и записывает нормальный текст.
+
+    apply=False: только считает. Для исправленных профилей заново считаются геосигналы и
+    text_location (в био мог быть город). Возвращает (профилей, {колонка: сколько исправлено})."""
+    cond = " OR ".join(f"{c} ~ '\\\\u[0-9a-fA-F]{{4}}'" for c in FIX_COLS)
+    cols = ", ".join(FIX_COLS)
+    rows = await conn.fetch(f"SELECT id, {cols} FROM profiles WHERE {cond} ORDER BY id")
+    per_col = dict.fromkeys(FIX_COLS, 0)
+    fixed_ids: list[int] = []
+    for r in rows:
+        new = {c: fix_text(r[c]) for c in FIX_COLS}
+        changed = {c: v for c, v in new.items() if v != r[c]}
+        if not changed:
+            continue
+        for c in changed:
+            per_col[c] += 1
+        fixed_ids.append(r["id"])
+        if apply:
+            sets = ", ".join(f"{c} = ${i + 2}" for i, c in enumerate(changed))
+            await conn.execute(
+                f"UPDATE profiles SET {sets} WHERE id = $1", r["id"], *changed.values()
+            )
+    if apply and fixed_ids:
+        for i in range(0, len(fixed_ids), BATCH):
+            chunk = await conn.fetch(
+                f"SELECT {PROFILE_COLS} FROM profiles WHERE id = ANY($1)", fixed_ids[i : i + BATCH]
+            )
+            for r in chunk:
+                await _write_profile(conn, r, replace=True, text_sources=text_sources)
+        log(f"    геосигналы пересчитаны: {len(fixed_ids)}")
+    return len(fixed_ids), per_col
 
 
 # --- Чтение для CLI -------------------------------------------------------------------

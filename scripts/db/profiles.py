@@ -8,7 +8,7 @@ import asyncpg
 
 from core.consts import USERNAME_RE
 from core.fsio import normalize_username
-from core.geo import Resolved
+from core.geo import DEFAULT_TEXT_SOURCES, Resolved
 from core.spam import RULES, SpamRules, Verdict
 from core.spamclass import CLASS_RULES, ClassRules, ClassVerdict
 from db import posts as repo
@@ -23,6 +23,48 @@ SOURCE_SQL = {
     "search": "p.is_target AND NOT p.is_banned AND p.discovered_via = 'search'",
     "authors": "p.is_target AND NOT p.is_banned AND p.discovered_via = 'author'",
 }
+
+
+# Глубина обработки: более глубокий режим покрывает более мелкий
+LEVELS = ("profile", "threads", "full")
+LEVEL_OF = {
+    "profile": "profile",
+    "threads": "threads",
+    "full": "full",
+    "only_new": "full",
+    "fill": "full",
+}
+# Результаты, после которых профиль обработан: ok/empty, 404, бан, чужой класс.
+# abort/error (429, сбой) и «класс не определён» обработкой не считаются.
+DONE_STATUSES = ("ok", "empty", "not_found", "banned", "skipped")
+
+
+def levels_covering(mode: str) -> list[str]:
+    """Уровни processed_mode, которые уже покрывают режим запуска (fill обрабатывает сам)."""
+    need = LEVEL_OF.get(mode)
+    return list(LEVELS[LEVELS.index(need) :]) if need and mode != "fill" else []
+
+
+async def drop_processed(conn: asyncpg.Connection, names: list[str], mode: str) -> list[str]:
+    """names без профилей, уже обработанных в этом режиме (или глубже) либо забаненных."""
+    levels = levels_covering(mode)
+    if not levels:
+        return names
+    rows = await conn.fetch(
+        "SELECT lower(username) AS u FROM profiles "
+        "WHERE lower(username) = ANY($1) AND (is_banned OR processed_mode = ANY($2))",
+        [n.lower() for n in names],
+        levels,
+    )
+    done = {r["u"] for r in rows}
+    return [n for n in names if n.lower() not in done]
+
+
+MARK_SQL = """
+UPDATE profiles SET processed_mode = $2
+WHERE lower(username) = lower($1)
+  AND coalesce(array_position($3::text[], processed_mode), 0) < array_position($3::text[], $2)
+"""
 
 
 def parse_source(value: str) -> tuple[str, list[str]]:
@@ -78,11 +120,13 @@ class ProfileStore:
         media_root: Path,
         spam_rules: SpamRules = RULES,
         class_rules: ClassRules = CLASS_RULES,
+        text_geo_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES,
     ):
         self.pool = pool
         self.media_root = media_root
         self.spam_rules = spam_rules  # пороги спам-детектора (в т. ч. SPAM_MIN_FOLLOWERS)
         self.class_rules = class_rules  # пороги классов 1/2/3 (SPAM_CLASS_*)
+        self.text_geo_sources = text_geo_sources  # откуда брать profiles.text_location
         self.last_classes: dict[
             int, int | None
         ] = {}  # profile_id -> последний залогированный класс
@@ -102,7 +146,9 @@ class ProfileStore:
     ) -> Resolved:
         """Данные профиля одной записью (страница, about, шапка, Instagram) + геосигналы."""
         async with self.pool.acquire() as conn:
-            return await save_profile_data(conn, profile_id, meta, about, header, link)
+            return await save_profile_data(
+                conn, profile_id, meta, about, header, link, self.text_geo_sources
+            )
 
     async def about_fetched(self, profile_id: int) -> bool:
         async with self.pool.acquire() as conn:
@@ -126,6 +172,11 @@ class ProfileStore:
         """id профиля; заводит строку, если её нет (без чтения постов, в отличие от load)."""
         async with self.pool.acquire() as conn:
             return await ensure_profile(conn, username)
+
+    async def mark_processed(self, username: str, mode: str) -> None:
+        """Профиль обработан до конца в режиме mode; более глубокую отметку не понижает."""
+        async with self.pool.acquire() as conn:
+            await conn.execute(MARK_SQL, username, LEVEL_OF[mode], list(LEVELS))
 
     async def known_codes(self, profile_id: int) -> set[str]:
         async with self.pool.acquire() as conn:

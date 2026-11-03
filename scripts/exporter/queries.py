@@ -40,7 +40,37 @@ LIMIT :limit
 """,
     ),
     "profiles": (
-        "Все профили: подписчики, категория, страна, класс, бан; --since: когда найден",
+        "Лист для выгрузки: id, ник, ссылка, заголовок, подписчики, ветки, просмотры, био, "
+        "дата создания, локации, темы, топики; --since: когда найден",
+        f"""
+SELECT p.id,
+       p.username AS "название",
+       {_URL} AS "ссылка",
+       nullif(trim(regexp_replace(p.title, '\\s*\\(@[A-Za-z0-9_.]+\\)\\s*•.*$', '')), '') AS "заголовок",
+       p.followers_count AS "подписчиков",
+       p.threads_count AS "веток",
+       p.recent_views AS "просмотров",
+       p.bio AS "bio",
+       p.about_joined AS "дата создания",
+       p.about_location AS "локация из био",
+       p.text_location AS "локация из текста",
+       (SELECT string_agg(e->>'text', ', ')
+          FROM jsonb_array_elements(
+                   CASE WHEN jsonb_typeof(p.topics) = 'array' THEN p.topics ELSE '[]'::jsonb END
+               ) e) AS "темы",
+       (SELECT string_agg(x.name || ' (' || x.n || ')', ', ' ORDER BY x.n DESC, x.name)
+          FROM (SELECT tp.name, count(*) AS n
+                  FROM posts t JOIN topics tp ON tp.id = t.topic_id
+                 WHERE t.profile_id = p.id
+                 GROUP BY tp.name ORDER BY n DESC, tp.name LIMIT 5) x) AS "топики"
+FROM profiles p
+WHERE p.is_target AND (:since::timestamptz IS NULL OR p.first_seen_at >= :since)
+ORDER BY p.followers_count DESC NULLS LAST, p.username
+LIMIT :limit
+""",
+    ),
+    "profiles-full": (
+        "Все профили, широко: подписчики, категория, страна, класс, бан; --since: когда найден",
         f"""
 SELECT p.username, p.followers_count, c.name_ru AS category, p.about_country AS country,
        p.about_location, p.spam_class, p.is_banned, p.review_status, p.discovered_via,

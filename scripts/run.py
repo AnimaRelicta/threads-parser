@@ -8,6 +8,7 @@
     uv run scripts/run.py olx_vetka_astana --fill-threads --since 7d --comments   # разбор этих веток
     uv run scripts/run.py --source new --threads-only --since 7d       # профили без веток
     uv run scripts/run.py --source new --threads-only --only-class 1,2  # только барахолки и продавцы
+    uv run scripts/run.py --threads-only --only-unprocessed            # продолжить: только необработанные
     uv run scripts/run.py olx_vetka_astana --profile-only              # только метаданные профиля
     uv run scripts/run.py --source all --profile-only --headless       # то же для всех профилей из БД
     uv run scripts/run.py --comments --depth 3 --accounts account_001,account_002 --workers 2
@@ -63,6 +64,13 @@ def build_parser(st) -> argparse.ArgumentParser:
         "Класс уже посчитан: берётся из БД, чужой профиль даже не открывается. Не считан: "
         "читаются первые SPAM_CLASS_SAMPLE (10) веток, по ним считается класс и решается, "
         "брать ли профиль (ветки чужого класса не сохраняются)",
+    )
+    ap.add_argument(
+        "--only-unprocessed",
+        action="store_true",
+        help="пропустить профили, уже обработанные до конца в этом режиме или глубже "
+        "(profiles.processed_mode); прерванные (429, ошибка) и ни разу не открытые берутся. "
+        "Позволяет продолжить большой список после остановки",
     )
     ap.add_argument(
         "--accounts",

@@ -9,6 +9,9 @@
 Примеры (из корня проекта):
     uv run scripts/cli.py geo rescan                 # только то, что считалось старой версией
     uv run scripts/cli.py geo rescan --force         # пересчитать всё по данным в БД
+    uv run scripts/cli.py geo textloc                # profiles.text_location по TEXT_GEO_SOURCES
+    uv run scripts/cli.py geo textloc --with-threads # + самые частые места в текстах веток
+    uv run scripts/cli.py geo textloc --sources title,bio --only-empty
     uv run scripts/cli.py geo stats
     uv run scripts/cli.py geo list --country KZ --city Алматы
     uv run scripts/cli.py geo list --csv data/export/geo.csv
@@ -20,7 +23,7 @@ from collections import Counter
 from pathlib import Path
 
 from config import ENV_FILE, load_settings
-from core.geo import DETECTOR_VERSION, find_locations
+from core.geo import DETECTOR_VERSION, TEXT_SOURCES, find_locations, parse_text_sources
 from db import geo as repo
 from db.pool import run_sync
 
@@ -36,6 +39,18 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument(
         "--force", action="store_true", help=f"всё, а не только версии ниже {DETECTOR_VERSION}"
     )
+    tl = sub.add_parser(
+        "textloc", help="пересчитать profiles.text_location (локация из названия, био, описания)"
+    )
+    tl.add_argument(
+        "--sources",
+        metavar="СПИСОК",
+        help=f"откуда брать, через запятую: {','.join(TEXT_SOURCES)} (по умолчанию TEXT_GEO_SOURCES)",
+    )
+    tl.add_argument(
+        "--with-threads", action="store_true", help="добавить к источникам тексты веток (threads)"
+    )
+    tl.add_argument("--only-empty", action="store_true", help="только профили без text_location")
     sub.add_parser("stats", help="топ городов и стран, профили без данных, источники")
     ls = sub.add_parser("list", help="профили с итоговой страной/городом и источником")
     ls.add_argument("--country", choices=("KZ", "UZ", "OTHER"), help="только эта итоговая страна")
@@ -48,12 +63,28 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_rescan(st, args) -> None:
     mode = "всё" if args.force else f"версии ниже {DETECTOR_VERSION}"
     print(f"[*] Пересчёт локаций ({mode}), справочник v{DETECTOR_VERSION}")
-    res = run_sync(st, lambda conn: repo.rescan(conn, args.force))
+    res = run_sync(st, lambda conn: repo.rescan(conn, args.force, text_sources=st.text_geo_sources))
     print(f"[+] Профилей: {res.profiles}, постов: {res.posts}, найдено упоминаний: {res.mentions}")
     for e in res.errors[:10]:
         print(f"[!] {e}")
     if res.errors:
         print(f"[!] Ошибок: {len(res.errors)} (остальное пересчитано)")
+
+
+def cmd_textloc(st, args) -> None:
+    try:
+        sources = parse_text_sources(args.sources) if args.sources else st.text_geo_sources
+    except ValueError as e:
+        raise SystemExit(f"--sources: {e}") from e
+    if args.with_threads and "threads" not in sources:
+        sources = (*sources, "threads")
+    print(f"[*] Локация из текста, источники: {', '.join(sources)}")
+    seen, found = run_sync(
+        st, lambda conn: repo.fill_text_location(conn, sources, args.only_empty)
+    )
+    print(f"[+] Профилей: {seen}, с локацией из текста: {found}")
+    if "threads" in sources:
+        print("[*] Места из веток берутся из location_mentions: после новых веток сделайте geo rescan")
 
 
 def _place(country: str | None, city: str | None) -> str:
@@ -150,6 +181,8 @@ def main() -> None:
     args = build_parser().parse_args()
     if args.cmd == "rescan":
         cmd_rescan(st, args)
+    elif args.cmd == "textloc":
+        cmd_textloc(st, args)
     elif args.cmd == "stats":
         cmd_stats(st)
     else:

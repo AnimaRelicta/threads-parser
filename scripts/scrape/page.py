@@ -6,7 +6,7 @@ from browser.net import Net
 from config import TH
 from core.errors import AuthProblem, RateLimited
 from core.jsonwalk import walk
-from scrape.consts import SORT_QS
+from scrape.consts import PROFILE_GRACE_MS, PROFILE_SETTLE_MS, SORT_QS
 from scrape.extract import read_embedded
 from scrape.harvest import Harvester
 
@@ -36,6 +36,20 @@ async def settle(
             quiet += step_ms
         if waited >= min_ms and quiet >= quiet_ms:
             return
+
+
+async def wait_profile_ready(page) -> None:
+    """Ждёт отрисовки профиля: выходит, как только в ленте появилась ссылка на ветку.
+
+    Потолок PROFILE_SETTLE_MS: профиль без веток (пустой, закрытый) ждёт его целиком, как раньше
+    ждал фиксированные 3 с. Профиль с ветками обычно готов за 1-2 с."""
+    try:
+        await page.wait_for_selector(
+            'a[href*="/post/"]', state="attached", timeout=PROFILE_SETTLE_MS
+        )
+    except PlaywrightError:  # таймаут: веток нет или страница не успела
+        return
+    await page.wait_for_timeout(PROFILE_GRACE_MS)
 
 
 CLICK_MORE_JS = r"""

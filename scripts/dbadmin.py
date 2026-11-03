@@ -4,6 +4,7 @@
 Команды (из корня проекта):
     uv run scripts/dbadmin.py migrate     # создать схему threads и применить миграции
     uv run scripts/dbadmin.py status      # применённые миграции и число строк в таблицах
+    uv run scripts/dbadmin.py fix-encoding        # починить био и др. с «\\u041f\\u043e...» (--dry-run)
     uv run scripts/dbadmin.py import-accounts   # перенести аккаунты из data/accounts.json
     uv run scripts/dbadmin.py import-profiles   # перенести posts.json, anchor.json и др. профилей
     uv run scripts/dbadmin.py import-search     # перенести posts.jsonl и jobs.json поиска
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from config import load_settings
 from db.accounts import import_legacy
+from db.geo import fix_encoding
 from db.legacy import import_profiles, import_search
 from db.migrate import migrate, status
 from db.pool import run_sync
@@ -44,6 +46,16 @@ def cmd_status(st) -> None:
             print(f"  {t:<{width}}  {n}")
     elif info["pending"]:
         print("\nСхема не создана: uv run scripts/dbadmin.py migrate")
+
+
+def cmd_fix_encoding(st, dry_run: bool) -> None:
+    """Текст профилей с неразобранными \\uXXXX (био, имя, заголовок) -> нормальный текст."""
+    n, per_col = run_sync(st, lambda conn: fix_encoding(conn, not dry_run, st.text_geo_sources))
+    cols = ", ".join(f"{c}: {k}" for c, k in per_col.items() if k)
+    verb = "нужно исправить" if dry_run else "исправлено"
+    print(f"[+] Профилей, где {verb}: {n}" + (f" ({cols})" if cols else ""))
+    if dry_run and n:
+        print("[*] Без --dry-run: uv run scripts/dbadmin.py fix-encoding")
 
 
 def cmd_import_accounts(st, file: Path | None) -> None:
@@ -97,6 +109,8 @@ def main() -> None:
     sub.add_parser("status", help="показать применённые миграции и размеры таблиц")
     imp = sub.add_parser("import-accounts", help="перенести аккаунты из accounts.json в БД")
     imp.add_argument("--file", type=Path, help="по умолчанию ACCOUNTS_FILE из .env")
+    fx = sub.add_parser("fix-encoding", help="починить текст с \\uXXXX (био, имя, заголовок)")
+    fx.add_argument("--dry-run", action="store_true", help="только посчитать, ничего не писать")
     ip = sub.add_parser("import-profiles", help="перенести данные профилей из data/output в БД")
     ip.add_argument("--dir", type=Path, help="по умолчанию OUTPUT_DIR из .env")
     ip.add_argument("profiles", nargs="*", help="только эти профили (по умолчанию все)")
@@ -109,6 +123,8 @@ def main() -> None:
             cmd_import_search(st, args.dir)
         elif args.cmd == "import-profiles":
             cmd_import_profiles(st, args.dir, args.profiles or None)
+        elif args.cmd == "fix-encoding":
+            cmd_fix_encoding(st, args.dry_run)
         elif args.cmd == "import-accounts":
             cmd_import_accounts(st, args.file)
         else:

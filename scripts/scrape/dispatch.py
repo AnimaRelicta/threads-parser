@@ -21,7 +21,7 @@ from core.logs import PSTAT, TAG, log
 from core.spam import rules_with
 from core.timeutil import parse_since
 from db.pool import DB_ERRORS, create_pool, run_sync
-from db.profiles import ProfileStore, list_targets
+from db.profiles import DONE_STATUSES, ProfileStore, drop_processed, list_targets
 from db.runs import finalize_run, start_run
 from db.spam import class_rules
 from registry.store import get_account, now_iso, pick_accounts
@@ -195,6 +195,14 @@ async def worker_main(
                         log(f"[!] @{name} вернётся в очередь другому аккаунту")
                         disp.put((name, tries + 1))
                         continue
+                if (
+                    res["status"] in DONE_STATUSES
+                    and res.get("stop_reason") != "class_undetermined"
+                ):
+                    try:  # отметка сразу, не в конце запуска: переживает падение и Ctrl+C
+                        await state.store.mark_processed(res["username"], res["mode"])
+                    except DB_ERRORS as e:
+                        log(f"[!] Отметка «обработан» не записана: {str(e)[:150]}")
                 state.got[res["username"]] = res
             finally:
                 disp.done()
@@ -275,7 +283,11 @@ async def main_async(
     # Пул на весь запуск: воркеры берут соединения на время одной записи
     pool = await create_pool(st, max_size=max(5, len(accounts) * m + 2))
     state.store = ProfileStore(
-        pool, Path(args.output), rules_with(st.spam_min_followers), class_rules(st)
+        pool,
+        Path(args.output),
+        rules_with(st.spam_min_followers),
+        class_rules(st),
+        st.text_geo_sources,
     )
     try:
         async with async_playwright() as p:
@@ -313,6 +325,22 @@ def run(args, st: Settings) -> None:
         log(f"[*] --source {args.source}: профилей в списке {len(usernames)}")
     if not usernames:
         raise SystemExit("Укажите профиль, --source или заполните файл со списком профилей")
+    if getattr(args, "only_unprocessed", False):
+        mode = run_mode(args)
+        if mode == "fill":
+            log(
+                "[*] --only-unprocessed: в --fill-threads не нужен, берутся только неразобранные ветки"
+            )
+        else:
+            total = len(usernames)
+            usernames = run_sync(st, lambda conn: drop_processed(conn, usernames, mode))
+            log(
+                f"[*] --only-unprocessed: уже обработано {total - len(usernames)} из {total}, "
+                f"осталось {len(usernames)}"
+            )
+            if not usernames:
+                log("[✓] Необработанных профилей нет")
+                return
     if args.depth == -1:
         args.depth = UNLIMITED_DEPTH
     elif args.depth < 1:

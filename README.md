@@ -304,8 +304,37 @@ uv run scripts/run.py --accounts account_001,account_002 --workers 2 --since 1m 
 
 Флаги: `--file`, `--accounts`, `--workers`, `--since` (30d, 4w, 1m, 1y или дата), `--limit`,
 `--comments`, `--depth`, `--max-comments`, `--recheck-days`, `--full-rescan`, `--full`,
-`--stop-after`, `--threads-only`, `--fill-threads`, `--profile-only`, `--only-class`, `--source`, `--with-videos`, `--no-block`, `--delay`, `--profile-delay`, `--headless`,
+`--stop-after`, `--threads-only`, `--fill-threads`, `--profile-only`, `--only-class`, `--only-unprocessed`, `--source`, `--with-videos`, `--no-block`, `--delay`, `--profile-delay`, `--headless`,
 `--debug`, `--output`. Справка: `uv run scripts/run.py -h`.
+
+### Продолжить с места остановки: `--only-unprocessed`
+
+```bash
+uv run scripts/run.py --source all --threads-only --only-unprocessed
+uv run scripts/run.py --file data/threads_profiles.txt --profile-only --only-unprocessed
+```
+
+Из списка (профиль, `--file`, `--source`) убираются профили, уже обработанные до конца в
+этом режиме или более глубоком, и забаненные. Отметка `profiles.processed_mode`
+(`profile` < `threads` < `full`, миграция 015) ставится сразу по окончании каждого профиля,
+поэтому переживает падение и Ctrl+C. Обработанным считается результат `ok`, `empty`, 404, бан и
+пропуск по чужому классу. Прерванные (429, ошибка браузера или БД) и профили, у которых не
+хватило веток для класса, остаются необработанными и берутся снова. Режим глубже покрывает
+мелкий: `--profile-only --only-unprocessed` пропустит и тех, у кого уже собраны ветки, а
+`--threads-only --only-unprocessed` возьмёт профили, обработанные только `--profile-only`.
+В `--fill-threads` флаг не нужен: он и так берёт только неразобранные ветки. Сколько осталось:
+`scripts/db/progress.sql` (блок 5).
+
+### Скорость и паузы
+
+Время на профиль складывается из пауз и ожиданий страницы. Паузы по умолчанию: `PROFILE_DELAY=8`
+(реально от 8 до 12 с между профилями одного воркера) и `DELAY=2` (от 2 до 4 с между ветками
+в полном проходе); раньше было 20 и 4. Профиль открывается без фиксированных 3 с: ожидание
+заканчивается, как только в ленте появилась первая ветка. Если в `scripts/.env` остались свои
+`DELAY` и `PROFILE_DELAY`, они сильнее значений по умолчанию: поправьте их там. Сколько реально
+уходит на профиль и сколько 429: `scripts/db/progress.sql` (блок 3). Ускорять дальше можно
+`--workers` (воркеров на аккаунт) и режимами `--threads-only`, `--only-class`: они не открывают
+каждую ветку.
 
 ### Только нужный класс профилей: `--only-class`
 
@@ -423,7 +452,9 @@ uv run scripts/cli.py spam --unban adina.rahatt       # снять бан и б�
 
 Запросы идут в read-only транзакции Postgres: `INSERT`/`UPDATE`/`DELETE`/DDL завершатся ошибкой, данные не изменятся. Времена в файле в UTC. Текст, начинающийся с `=`, записывается как текст, а не как формула.
 
-Базовые запросы (`--list`): `spam-classes`, `banned`, `profiles`, `threads`, `top-authors`, `instagram`. Смысл `--since` у каждого указан в `--list`.
+Базовые запросы (`--list`): `spam-classes`, `banned`, `profiles`, `profiles-full`, `threads`, `top-authors`, `instagram`. Смысл `--since` у каждого указан в `--list`.
+
+Лист `profiles` — только важное, в таком порядке: `id`, `название` (ник), `ссылка`, `заголовок` (название профиля без «(@ник) • Threads…»), `подписчиков`, `веток` (`threads_count`, из og:description), `просмотров` (недавние просмотры из шапки), `bio`, `дата создания` (`about_joined`), `локация из био` (`about_location`, «Об этом профиле»), `локация из текста` (`text_location`), `темы` (чипы шапки профиля), `топики` (до 5 тем его веток из справочника `topics` с числом веток). Прежний широкий лист (категория, класс, бан, статус разбора) — `profiles-full`.
 
 **Свои запросы** лежат в `data/export_queries.sql` (путь: `EXPORT_QUERIES_FILE` или `--queries-file`):
 
@@ -558,9 +589,34 @@ uv run scripts/run.py --source authors --threads-only --since 7d   # собра�
 
 В БД лежат только факты (`profiles.about_country`, `location_mentions`, миграция 011); итог считается при чтении (`core/geo.py::resolve`), поэтому правила меняются без миграций. Если надёжные источники называют разные страны, итог берётся из самого надёжного, строка помечается КОНФЛИКТ и показывает все источники. Сигналы профиля пишутся в `open_profile` без запросов к Threads, упоминания постов, при сохранении поста; ошибки детектора только логируются.
 
+### Локация из текста: `profiles.text_location`
+
+Отдельная колонка (миграция 016), на итоговую страну не влияет: подсказка для профилей, у которых «Об этом профиле» собрать не удалось. Города и страны КЗ и УЗ ищутся по тому же справочнику `core/geo.py` в тексте профиля: `KZ Астана, UZ Ташкент`; какие источники сработали, лежит в `text_location_src` (`title,bio`). Источники задаёт `TEXT_GEO_SOURCES` в `scripts/.env` (или `--sources`):
+
+| Источник | Что читается | По умолчанию |
+|---|---|---|
+| `title` | название профиля (`profiles.title` без «(@ник) • Threads…») | да |
+| `name` | имя из «Об этом профиле» (`about_name`) | да |
+| `bio` | био | да |
+| `description` | описание профиля (`og_description` без счётчиков подписчиков и веток) | да |
+| `threads` | самые частые места в текстах его веток (`location_mentions`, до 3) | нет, слабый сигнал |
+
+Колонка заполняется при заходе в профиль. По уже собранным данным: `geo textloc` (`--with-threads` добавляет ветки к источникам, `--only-empty` берёт только пустые). Места из веток считаются по `location_mentions`, поэтому после новых веток сначала `geo rescan`.
+
+### Починка кодировки био: `dbadmin.py fix-encoding`
+
+Био, записанное до этой правки, могло лежать в БД как `\u041f\u043e\u043a\u0443...` (в JSON страницы кириллица и эмодзи экранированы, а перекодировка этого не разбирала). Источник исправлен (`core/biography.py`, `core/textfix.py`). Старые записи чинятся одной командой: она разбирает `bio`, `title`, `og_title`, `og_description`, `about_name`, `about_location`, после чего пересчитывает геосигналы и `text_location` этих профилей. Повторный запуск безопасен.
+
+```bash
+uv run scripts/dbadmin.py fix-encoding --dry-run   # сколько записей затронуто
+uv run scripts/dbadmin.py fix-encoding
+```
+
 ```bash
 uv run scripts/cli.py geo rescan [--force]                  # пересчёт по данным в БД (после правки справочника: поднять DETECTOR_VERSION)
+uv run scripts/cli.py geo textloc [--with-threads] [--sources title,bio] [--only-empty]  # profiles.text_location
 uv run scripts/cli.py geo stats                             # топ стран/городов по профилям и постам, без данных, источники
 uv run scripts/cli.py geo list --country KZ --city Алматы [--csv файл]
 uv run python tests/geo_check.py                            # проверка без сети и БД
+uv run python tests/textloc_check.py                        # кодировка био, число веток, text_location
 ```

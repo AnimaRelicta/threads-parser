@@ -28,6 +28,7 @@ from scrape.spamcheck import check_class, feed_items
 class Gate:
     keep: bool  # True: профиль нужного класса, обход продолжается
     note: str  # объяснение для лога и `profile_runs.note`
+    final: bool = True  # False: класс не определён, профиль не считается обработанным
 
 
 def _decide(code: int | None, wanted: frozenset[int], source: str) -> Gate:
@@ -40,7 +41,11 @@ def _decide(code: int | None, wanted: frozenset[int], source: str) -> Gate:
 def skip(result: dict, gate: Gate, username: str) -> dict:
     """Итог пропущенного профиля: статус skipped, причина в note."""
     log(f"[CLASS] @{username}: {gate.note}: пропускаю")
-    result.update(status="skipped", stop_reason="class", note=gate.note)
+    result.update(
+        status="skipped",
+        stop_reason="class" if gate.final else "class_undetermined",
+        note=gate.note,
+    )
     result.setdefault("counts", {})
     return result
 
@@ -52,7 +57,9 @@ async def precheck(store: ProfileStore, profile_id: int, wanted: frozenset[int])
 
 
 def _undetermined(cv: ClassVerdict) -> Gate:
-    return Gate(False, f"класс не определён ({cv.reason}), повторится при следующем запуске")
+    return Gate(
+        False, f"класс не определён ({cv.reason}), повторится при следующем запуске", final=False
+    )
 
 
 async def detect_feed(
