@@ -8,6 +8,9 @@ from exporter.sqlfile import Query
 
 _URL = "'https://www.threads.com/@' || p.username"
 
+# profiles.links: [{text, url, kind: instagram|telegram|whatsapp|other, handle}] из шапки профиля
+_LINKS = "CASE WHEN jsonb_typeof(p.links) = 'array' THEN p.links ELSE '[]'::jsonb END"
+
 _CLASS_NAME = (
     "CASE p.spam_class WHEN 1 THEN 'барахолка' WHEN 2 THEN 'продавец' WHEN 3 THEN 'спамер' END"
 )
@@ -51,6 +54,19 @@ SELECT p.id,
        p.threads_count AS "веток",
        p.recent_views AS "просмотров",
        p.bio AS "bio",
+       coalesce(
+           (SELECT l->>'url' FROM jsonb_array_elements({_LINKS}) l
+             WHERE l->>'kind' = 'instagram' LIMIT 1),
+           (SELECT 'https://www.instagram.com/' || il.instagram_username
+              FROM instagram_links il
+             WHERE il.profile_id = p.id AND il.confidence = 'confirmed')
+       ) AS "instagram",
+       (SELECT string_agg(DISTINCT l->>'url', ', ') FROM jsonb_array_elements({_LINKS}) l
+         WHERE l->>'kind' = 'whatsapp') AS "whatsapp",
+       (SELECT string_agg(DISTINCT l->>'url', ', ') FROM jsonb_array_elements({_LINKS}) l
+         WHERE l->>'kind' = 'telegram') AS "telegram",
+       (SELECT string_agg(DISTINCT l->>'url', ', ') FROM jsonb_array_elements({_LINKS}) l
+         WHERE l->>'kind' = 'other') AS "другие ссылки",
        p.about_joined AS "дата создания",
        p.about_location AS "локация из био",
        p.text_location AS "локация из текста",
