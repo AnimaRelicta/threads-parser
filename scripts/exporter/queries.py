@@ -15,6 +15,44 @@ _CLASS_NAME = (
     "CASE p.spam_class WHEN 1 THEN 'барахолка' WHEN 2 THEN 'продавец' WHEN 3 THEN 'спамер' END"
 )
 
+# profiles.about_joined: «Октябрь 2026 г.» (или «October 2026») -> 1-е число месяца. Дня в источнике нет.
+_MONTHS = ", ".join(
+    f"('{stem}', {n})"
+    for n, stems in enumerate(
+        (
+            "янв jan",
+            "фев feb",
+            "мар mar",
+            "апр apr",
+            "мая май may",
+            "июн jun",
+            "июл jul",
+            "авг aug",
+            "сен sep",
+            "окт oct",
+            "ноя nov",
+            "дек dec",
+        ),
+        start=1,
+    )
+    for stem in stems.split()
+)
+_JOINED = f"""LEFT JOIN LATERAL (
+    SELECT make_date((regexp_match(p.about_joined, '([0-9]{{4}})'))[1]::int, m.n, 1) AS d
+      FROM (VALUES {_MONTHS}) m(stem, n)
+     WHERE lower(p.about_joined) LIKE m.stem || '%'
+     LIMIT 1
+) j ON true"""
+
+
+def _est(days: int) -> str:
+    """Ветки за N дней ≈ среднее в день с даты регистрации × N, но не больше всех веток."""
+    return (
+        "CASE WHEN j.d IS NOT NULL THEN round(least(p.threads_count::numeric, "
+        f"p.threads_count::numeric / greatest(current_date - j.d, 1) * {days}), 1) END"
+    )
+
+
 _SQL = {
     "spam-classes": (
         "Профили с классом 1/2/3 (spam_class); --since: когда класс посчитан",
@@ -44,7 +82,7 @@ LIMIT :limit
     ),
     "profiles": (
         "Лист для выгрузки: id, ник, ссылка, заголовок, подписчики, ветки, просмотры, био, "
-        "дата создания, локации, темы, топики; --since: когда найден",
+        "дата создания, локации, темы, топики, оценка веток за 7/30/90 дней; --since: когда найден",
         f"""
 SELECT p.id,
        p.username AS "название",
@@ -78,8 +116,12 @@ SELECT p.id,
           FROM (SELECT tp.name, count(*) AS n
                   FROM posts t JOIN topics tp ON tp.id = t.topic_id
                  WHERE t.profile_id = p.id
-                 GROUP BY tp.name ORDER BY n DESC, tp.name LIMIT 5) x) AS "топики"
+                 GROUP BY tp.name ORDER BY n DESC, tp.name LIMIT 5) x) AS "топики",
+       {_est(7)} AS "веток за 7д (оценка)",
+       {_est(30)} AS "веток за 30д (оценка)",
+       {_est(90)} AS "веток за 90д (оценка)"
 FROM profiles p
+{_JOINED}
 WHERE p.is_target AND (:since::timestamptz IS NULL OR p.first_seen_at >= :since)
 ORDER BY p.followers_count DESC NULLS LAST, p.username
 LIMIT :limit

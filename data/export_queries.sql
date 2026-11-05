@@ -15,3 +15,10 @@ WHERE p.spam_class IN (2, 3) AND coalesce(p.followers_count, 0) < 500
 GROUP BY p.id
 ORDER BY threads DESC, p.username
 LIMIT :limit;
+
+
+-- name: all-posts
+-- desc: прочто все листы
+SELECT *
+FROM posts p
+LIMIT 25000;
