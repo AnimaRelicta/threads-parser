@@ -65,7 +65,7 @@ uv run scripts/accounts.py add 3            # завести 3 аккаунта,
 uv run scripts/accounts.py list             # аккаунты, статусы, статистика
 uv run scripts/accounts.py check            # сессии живы?
 uv run scripts/accounts.py relogin account_002   # сессия истекла
-uv run scripts/accounts.py proxy account_001 socks5://127.0.0.1:12334
+uv run scripts/accounts.py proxy account_002 socks5://127.0.0.1:12334
 ```
 
 Если файл кук уже лежит в `data/cookies/`, парсер сам заведёт аккаунт в реестре.

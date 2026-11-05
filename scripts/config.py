@@ -48,6 +48,13 @@ class Settings:
     search_output_dir: Path = ROOT / "output" / "search"
     search_workers: int = 3
     search_window_days: int = 0
+    search_start_delay: float = 1.5
+    search_page_wait_ms: int = 2500
+    search_scroll_min_ms: int = 500
+    search_scroll_quiet_ms: int = 1200
+    search_scroll_max_ms: int = 6000
+    search_stale_scrolls: int = 2
+    search_429_pause: int = 60
     # --- scripts/postlist.py: сбор веток по списку ссылок ----------------------
     posts_file: Path = ROOT / "data" / "threads_posts.txt"
     posts_workers: int = 3
@@ -181,6 +188,13 @@ def load_settings() -> Settings:
         search_output_dir=_path(get("SEARCH_OUTPUT_DIR"), ROOT / "output" / "search"),
         search_workers=max(1, _int(get("SEARCH_WORKERS"), 3)),
         search_window_days=max(0, _int(get("SEARCH_WINDOW_DAYS"), 0)),
+        search_start_delay=max(0.0, _float(get("SEARCH_START_DELAY"), 1.5)),
+        search_page_wait_ms=max(0, _int(get("SEARCH_PAGE_WAIT_MS"), 2500)),
+        search_scroll_min_ms=max(0, _int(get("SEARCH_SCROLL_MIN_MS"), 500)),
+        search_scroll_quiet_ms=max(0, _int(get("SEARCH_SCROLL_QUIET_MS"), 1200)),
+        search_scroll_max_ms=max(150, _int(get("SEARCH_SCROLL_MAX_MS"), 6000)),
+        search_stale_scrolls=max(1, _int(get("SEARCH_STALE_SCROLLS"), 2)),
+        search_429_pause=max(0, _int(get("SEARCH_429_PAUSE"), 60)),
         posts_file=_path(get("POSTS_FILE"), ROOT / "data" / "threads_posts.txt"),
         posts_workers=max(1, _int(get("POSTS_WORKERS"), 3)),
         posts_delay=max(0.0, _float(get("POSTS_DELAY"), 0.3)),

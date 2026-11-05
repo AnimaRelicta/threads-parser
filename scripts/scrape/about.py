@@ -36,30 +36,27 @@ FIND_ICONS_JS = r"""
 }
 """
 
-# Строки окна: заголовок = жирный (>=600) листовой span, значение = остальной текст
-# колонки, в которой он лежит. Окно рисует Bloks (div.wbloks_1), на нём и ограничиваемся,
-# чтобы не зацепить жирные тексты ленты.
+# Строки окна: Threads рисует их списком <ul><li>, в каждом <li> первый текстовый лист это
+# заголовок («Дата регистрации»), остальные это значение. Классы и жирность не используем:
+# они генерируются (x1lliihq...) и меняются. Если окна нет, возвращаем [] (по этому
+# _close понимает, что окно закрыто).
 READ_ROWS_JS = r"""
 () => {
     const dialogs = document.querySelectorAll('[role="dialog"]');
-    const root = dialogs.length ? dialogs[dialogs.length - 1] : document;
-    const clean = s => (s || '').replace(/ /g, ' ').replace(/\s+/g, ' ').trim();
+    if (!dialogs.length) return [];
+    const root = dialogs[dialogs.length - 1];
+    const clean = s => (s || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
     const rows = [], seen = new Set();
-    for (const lab of root.querySelectorAll('.wbloks_1 span')) {
-        if (lab.children.length) continue;
-        if (parseInt(getComputedStyle(lab).fontWeight, 10) < 600) continue;
-        const head = lab.parentElement, col = head && head.parentElement;
-        if (!col) continue;
-        const label = clean(lab.textContent);
-        if (!label || seen.has(label)) continue;
-        const parts = [];
-        for (const ch of col.children) {
-            if (ch === head) continue;
-            const t = clean(ch.textContent);
-            if (t) parts.push(t);
+    for (const li of root.querySelectorAll('li')) {
+        const texts = [];
+        for (const el of li.querySelectorAll('div, span')) {
+            if (el.children.length) continue;  // только листья с собственным текстом
+            const t = clean(el.textContent);
+            if (t) texts.push(t);
         }
-        const value = parts.join(' ');
-        if (!value) continue;
+        if (texts.length < 2) continue;
+        const label = texts[0], value = texts.slice(1).join(' ');
+        if (seen.has(label)) continue;
         seen.add(label);
         rows.push([label, value]);
     }

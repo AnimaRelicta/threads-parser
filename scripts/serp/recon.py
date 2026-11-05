@@ -55,7 +55,7 @@ async def run_recon(st, args, task: "SearchTask") -> None:
             resp = await page.goto(url, wait_until="domcontentloaded")
             if resp is not None:
                 log(f"[recon] HTTP {resp.status}")
-            await page.wait_for_timeout(2500)
+            await page.wait_for_timeout(st.search_page_wait_ms)
 
             all_docs = await read_all_embedded(page)
             log(f"[recon] встроенных JSON-документов на старте: {len(all_docs)}")
@@ -64,7 +64,13 @@ async def run_recon(st, args, task: "SearchTask") -> None:
             for i in range(max_scrolls):
                 n0 = len(net.captured)
                 await scroll_down(page)
-                await settle(page, net.captured, min_ms=500, quiet_ms=1200, max_ms=6000)
+                await settle(
+                    page,
+                    net.captured,
+                    min_ms=st.search_scroll_min_ms,
+                    quiet_ms=st.search_scroll_quiet_ms,
+                    max_ms=st.search_scroll_max_ms,
+                )
                 log(
                     f"[recon] прокрутка {i + 1}/{max_scrolls}: "
                     f"новых сетевых JSON {len(net.captured) - n0} (всего {len(net.captured)})"

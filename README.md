@@ -81,7 +81,7 @@ uv run scripts/cli.py parse --help                                  # справ
 | `posts.py` | Посты, комментарии, медиа, якоря и пропущенные посты профиля: запись и чтение в прежнем формате словарей. | `save_post`, `load_profile_posts`, `mark_skipped`, `save_anchor`, `about_fetched`, `upsert_topic` |
 | `profile_data.py` | Данные профиля одним вызовом: страница, «Об этом профиле», шапка, `instagram_links` (одна транзакция), затем геосигналы `location_mentions` по строке из `RETURNING`. | `save_profile_data` |
 | `profiles.py` | Хранилище профильного пайплайна поверх пула: общий для воркеров запуска. | `ProfileStore`, `ProfileState` |
-| `search.py` | Поиск: очередь `search_jobs`, найденные посты, связи `post_hits`, пересчёт фильтра. | `ensure_job`, `start_job`, `finish_job`, `save_hits`, `refilter` |
+| `search.py` | Поиск: очередь `search_jobs`, найденные посты, связи `post_hits`, пересчёт фильтра. | `ensure_job`, `start_job`, `finish_job`, `save_hits`, `add_keyword`, `refilter` |
 | `geo.py` | Локации (`location_mentions`, `profiles.about_country`): запись при сборе профиля и поста, пересчёт `rescan`, выборки для CLI. | `save_geo`, `save_post_mentions`, `rescan`, `load_profile_geo` |
 | `legacy.py` | Разовый перенос старых файлов (posts.json профилей, posts.jsonl и jobs.json поиска). | `normalize_post`, `import_profiles`, `import_search` |
 | `runs.py` | Запуски: `runs`, `run_accounts`, `profile_runs`. | `start_run`, `finalize_run`, `finish_run`, `save_profile_runs`, `ensure_profile` |
@@ -103,10 +103,10 @@ uv run scripts/cli.py parse --help                                  # справ
 `media/`, `captions.txt` и итоговый `summary.json`.
 
 Поиск: готовое окно (задача `done`) не перезапускается без `--force`; пост, найденный несколькими
-запросами, хранится один раз, а каждая находка записана в `post_hits`. Статус `approved/rejected`
+запросами, хранится один раз, а каждая находка записана в `post_hits`; все запросы, по которым найден пост, лежат списком в `posts.found_keywords` (нижний регистр, без повторов, в порядке находки; миграция 018 заполняет его по старым `post_hits`). Статус `approved/rejected`
 считается при сохранении (`filter_version` — версия правил); после правки правил в
 `core/textfilter.py` нужно поднять `FILTER_VERSION` и выполнить `uv run scripts/search.py --refilter`
-(с `--force` пересчитываются все посты). Данные прежних запусков:
+(с `--force` пересчитываются все посты). Паузы поиска (`SEARCH_START_DELAY`, `SEARCH_PAGE_WAIT_MS`, `SEARCH_SCROLL_*_MS`, `SEARCH_STALE_SCROLLS`, `SEARCH_429_PAUSE`) настраиваются в `scripts/.env`, описание — в `.env.example`. Данные прежних запусков:
 `uv run scripts/dbadmin.py import-search` (`posts.jsonl` и `jobs.json`; находки старых постов
 привязываются к служебной задаче `legacy|запрос|режим`, потому что окно дат в файле не хранилось).
 

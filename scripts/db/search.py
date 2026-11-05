@@ -116,13 +116,33 @@ RETURNING code
 """
 
 
+def normalize_keyword(query: str) -> str:
+    """Ключ для posts.found_keywords: пробелы схлопнуты, нижний регистр."""
+    return " ".join(query.split()).lower()
+
+
+async def add_keyword(conn: asyncpg.Connection, codes: list[str], keyword: str) -> None:
+    """Дописывает запрос в posts.found_keywords постов (если его там ещё нет)."""
+    if not codes or not keyword:
+        return
+    await conn.execute(
+        """
+        UPDATE posts SET found_keywords = array_append(found_keywords, $2)
+        WHERE code = ANY($1::text[]) AND NOT ($2 = ANY(found_keywords))
+        """,
+        codes,
+        keyword,
+    )
+
+
 async def save_hits(
     conn: asyncpg.Connection, job_id: int, posts: list[dict]
 ) -> tuple[int, int]:
     """Сохраняет посты задачи и связи post_hits. Возвращает (новых, повторов).
 
     Повтор = пост уже был в базе (найден другим запросом или собран профилем); связь с
-    задачей добавляется всё равно: по ней считается качество каждого запроса.
+    задачей добавляется всё равно: по ней считается качество каждого запроса, а запрос
+    задачи дописывается в posts.found_keywords (и у новых постов, и у повторов).
     """
     new = dupes = 0
     topic_ids: dict[str, int] = {}
@@ -163,6 +183,8 @@ async def save_hits(
                 "INSERT INTO post_hits (post_code, job_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
                 [(p["code"], job_id) for p in posts],
             )
+            query = await conn.fetchval("SELECT query FROM search_jobs WHERE id = $1", job_id)
+            await add_keyword(conn, [p["code"] for p in posts], normalize_keyword(query or ""))
     return new, dupes
 
 

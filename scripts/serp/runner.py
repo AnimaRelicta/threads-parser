@@ -28,6 +28,7 @@ async def process_search_task(
     args,
     store: SearchStore,
     job_id: int,
+    st,
 ) -> dict:
     """Обрабатывает одну задачу поиска; найденные посты сразу пишет в БД.
 
@@ -41,7 +42,7 @@ async def process_search_task(
     """
 
     # Небольшая пауза перед стартом задачи, чтобы не долбить сайт резко.
-    await asyncio.sleep(1.5)
+    await asyncio.sleep(st.search_start_delay)
 
     net.captured.clear()
 
@@ -65,7 +66,7 @@ async def process_search_task(
         }
 
     # Дать странице дорисоваться и поднять первичные embedded JSON.
-    await page.wait_for_timeout(2500)
+    await page.wait_for_timeout(st.search_page_wait_ms)
     embedded = await read_all_embedded(page)
 
     max_posts = int(getattr(args, "max_posts", 0) or 0)
@@ -89,9 +90,9 @@ async def process_search_task(
         await settle(
             page,
             net.captured,
-            min_ms=500,
-            quiet_ms=1200,
-            max_ms=6000,
+            min_ms=st.search_scroll_min_ms,
+            quiet_ms=st.search_scroll_quiet_ms,
+            max_ms=st.search_scroll_max_ms,
         )
 
         scrolls += 1
@@ -106,8 +107,8 @@ async def process_search_task(
 
         if count == last_count:
             stale += 1
-            # Две пустые прокрутки подряд считаем достаточной остановкой.
-            if stale >= 2:
+            # N пустых прокруток подряд (SEARCH_STALE_SCROLLS) — конец выдачи.
+            if stale >= st.search_stale_scrolls:
                 break
         else:
             stale = 0
@@ -204,7 +205,7 @@ async def search_with_store(
                 net.captured.clear()
                 page.on("response", make_handler(net.captured, net))
                 try:
-                    res = await process_search_task(page, net, task, args, store, job_id)
+                    res = await process_search_task(page, net, task, args, store, job_id, st)
                 except Exception as e:
                     err = f"{type(e).__name__}: {str(e)[:150]}"
                     log(f"[!] {tag} {label}: ошибка браузера/БД: {err}")
@@ -235,7 +236,7 @@ async def search_with_store(
 
                 elif status == "429":
                     add_stat(acc.name, e429=1)
-                    wait = 60 * (tries + 1)
+                    wait = st.search_429_pause * (tries + 1)
                     pause_state["until"] = max(pause_state["until"], time.monotonic() + wait)
                     if tries + 1 >= n_accounts:
                         await store.fail_job(
