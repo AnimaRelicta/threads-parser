@@ -22,3 +22,9 @@ LIMIT :limit;
 SELECT *
 FROM posts p
 LIMIT 25000;
+
+--name: all-profiles
+--desc: профили
+SELECT *
+FROM profiles p
+LIMIT 5000;

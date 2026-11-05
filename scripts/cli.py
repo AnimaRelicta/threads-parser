@@ -9,6 +9,10 @@
     uv run scripts/cli.py spam --check            # найти спам-профили (без --apply не банит)
     uv run scripts/cli.py export spam-classes --since 7d   # выгрузка из БД в xlsx
     uv run scripts/cli.py classify --limit 50      # категории профилей через LLM
+    uv run scripts/cli.py jev --dry-run            # профили КЗ для Jev: сколько подходит
+    uv run scripts/cli.py jev --all                # полный прогон через Jev
+    uv run scripts/cli.py jev-posts --dry-run      # посты авторов КЗ для Jev: сколько подходит
+    uv run scripts/cli.py jev-posts --all          # полный прогон постов через Jev
     uv run scripts/cli.py accounts check --headless
     uv run scripts/cli.py db migrate          # схема Postgres
     uv run scripts/cli.py parse --help        # справка подкоманды
@@ -29,6 +33,14 @@ COMMANDS = {
     "spam": ("spam", "спам-профили: проверка по БД, список банов, разбан (spam.py)"),
     "export": ("export", "выгрузка из БД в xlsx: базовые и свои запросы (export.py)"),
     "classify": ("classify.cli", "категории профилей через LLM (classify/cli.py)"),
+    "jev": (
+        "classify.jev_cli",
+        "категории профилей КЗ через Jev: --dry-run, --all (classify/jev_cli.py)",
+    ),
+    "jev-posts": (
+        "classify.jev_posts_cli",
+        "категории постов авторов КЗ через Jev (classify/jev_posts_cli.py)",
+    ),
     "accounts": ("accounts", "аккаунты: add, list, relogin, check, export, import (accounts.py)"),
     "db": ("dbadmin", "база Postgres: migrate, status (dbadmin.py)"),
 }

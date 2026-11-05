@@ -58,6 +58,20 @@ class Settings:
     llm_workers: int = 2
     llm_sample_threads: int = 10  # сколько последних веток профиля идёт в контекст
 
+    # --- классификация профилей через Jev (TypeSafe System One, scripts/classify/jev_*.py) ---
+    jev_api_key: str | None = None  # OPENROUTER_API_KEY (или JEV_API_KEY), только в scripts/.env
+    jev_url: str = "https://openrouter.ai/api/v1/systemone"  # JEV_URL (System One через OpenRouter)
+    jev_model: str = "typesafe/jev-1.14"  # JEV_MODEL: версия, а не алиас ~typesafe/jev-latest
+    jev_proxy: str | None = None  # JEV_PROXY, например socks5://127.0.0.1:12334 (Hiddify)
+    jev_min_version: str = "1.14"  # JEV_MIN_VERSION: ответ модели старше этой версии = стоп
+    jev_timeout_sec: int = 60
+    jev_max_retries: int = 3
+    jev_workers: int = 4
+    jev_min_prob: float = 0.6  # JEV_MIN_PROB: вероятность лучшего класса ниже = «Прочее»
+    jev_min_confidence: float = 0.5  # JEV_MIN_CONFIDENCE: confidence ответа ниже = «Прочее»
+    jev_noul_gate: bool = True  # JEV_NOUL_GATE: вторая проверка «подходит ли хоть один класс 1-6»
+    jev_noul_min: float = 0.5  # JEV_NOUL_MIN: Noul ниже = «Прочее»
+
     # --- спам-детектор (core/spam.py) ----------------------------------------
     # откуда брать profiles.text_location: title,name,bio,description,threads (TEXT_GEO_SOURCES)
     text_geo_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES
@@ -170,6 +184,18 @@ def load_settings() -> Settings:
         llm_max_retries=max(0, _int(get("LLM_MAX_RETRIES"), 3)),
         llm_workers=max(1, _int(get("LLM_WORKERS"), 2)),
         llm_sample_threads=max(1, _int(get("LLM_SAMPLE_THREADS"), 10)),
+        jev_api_key=(get("OPENROUTER_API_KEY") or get("JEV_API_KEY") or "").strip() or None,
+        jev_url=(get("JEV_URL") or "").strip() or "https://openrouter.ai/api/v1/systemone",
+        jev_model=(get("JEV_MODEL") or "").strip() or "typesafe/jev-1.14",
+        jev_proxy=(get("JEV_PROXY") or "").strip() or None,
+        jev_min_version=(get("JEV_MIN_VERSION") or "").strip() or "1.14",
+        jev_timeout_sec=max(1, _int(get("JEV_TIMEOUT_SEC"), 60)),
+        jev_max_retries=max(0, _int(get("JEV_MAX_RETRIES"), 3)),
+        jev_workers=max(1, _int(get("JEV_WORKERS"), 4)),
+        jev_min_prob=min(1.0, max(0.0, _float(get("JEV_MIN_PROB"), 0.6))),
+        jev_min_confidence=min(1.0, max(0.0, _float(get("JEV_MIN_CONFIDENCE"), 0.5))),
+        jev_noul_gate=_bool(get("JEV_NOUL_GATE"), True),
+        jev_noul_min=min(1.0, max(0.0, _float(get("JEV_NOUL_MIN"), 0.5))),
         text_geo_sources=_text_sources(get("TEXT_GEO_SOURCES")),
         spam_min_followers=max(0, _int(get("SPAM_MIN_FOLLOWERS"), 1000)),
         spam_class_sample=max(1, _int(get("SPAM_CLASS_SAMPLE"), 10)),

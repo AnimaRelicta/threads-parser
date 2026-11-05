@@ -392,6 +392,28 @@ uv run scripts/run.py --threads-only --since 1m          # профили из d
 (`--comments`, `--depth`, `--with-videos` и т. п.) игнорируются с предупреждением.
 В `profile_runs` такой запуск пишется с `mode='threads'`; колонки `posts_*` в нём считают ветки.
 
+### Категории профилей КЗ через Jev: `jev`
+
+```bash
+uv run scripts/cli.py jev --dry-run [--show 5]   # фильтр КЗ + поля профиля, счётчики, без запросов
+uv run scripts/cli.py jev --limit 50             # пробный прогон
+uv run scripts/cli.py jev --all [--recheck]      # полный прогон
+uv run python tests/jev_check.py                 # проверка без БД и сети
+```
+
+Jev идёт через OpenRouter (`OPENROUTER_API_KEY`, `JEV_MODEL=typesafe/jev-1.14`), запросы через SOCKS5 `JEV_PROXY` (нужен `httpx[socks]`). Отбор: КЗ по `geo.resolve`, затем `about_name`, `bio` (иначе `og_description`), `topics`, местоположение «Казахстан». Берётся класс с наибольшей вероятностью, но при вероятности < `JEV_MIN_PROB`, confidence < `JEV_MIN_CONFIDENCE` или отрицательной Noul-проверке итог `other` (Прочее). Все вероятности лежат в `profiles.category_raw`. Ответ модели старше `JEV_MIN_VERSION` останавливает запуск.
+
+### Категории постов КЗ через Jev: `jev-posts`
+
+```bash
+uv run scripts/cli.py db migrate                  # миграция 017: posts.category_*
+uv run scripts/cli.py jev-posts --dry-run [--show 5]
+uv run scripts/cli.py jev-posts --limit 100       # пробный прогон
+uv run scripts/cli.py jev-posts --all [--recheck] # полный прогон
+```
+
+`posts JOIN profiles` по `lower(profiles.username) = lower(posts.author_username)`, фильтр `profiles.about_location = «Казахстан»` и не забанен; классифицируется только `posts.text` (короче `--min-chars` пропускается). Категории, пороги, защита «Прочее» и прокси те же, что у `jev`. Результат: `posts.category_id`, `category_raw`, `category_model`, `category_prompt_version`. Пост с ошибкой запроса остаётся без категории и берётся в следующем запуске.
+
 ### Категории профилей: `classify`
 
 ```bash
