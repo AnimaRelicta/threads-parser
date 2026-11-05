@@ -311,7 +311,7 @@ uv run scripts/run.py --accounts account_001,account_002 --workers 2 --since 1m 
 
 ```bash
 uv run scripts/run.py --source all --threads-only --only-unprocessed
-uv run scripts/run.py --file data/threads_profiles.txt --profile-only --only-unprocessed
+uv run scripts/run.py --source all --profile-only --only-unprocessed
 ```
 
 Из списка (профиль, `--file`, `--source`) убираются профили, уже обработанные до конца в

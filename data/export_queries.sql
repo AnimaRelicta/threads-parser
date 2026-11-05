@@ -21,7 +21,7 @@ LIMIT :limit;
 -- desc: прочто все листы
 SELECT *
 FROM posts p
-LIMIT 25000;
+LIMIT 50000;
 
 --name: all-profiles
 --desc: профили

@@ -3,26 +3,27 @@
 
 Запуск:
   uv run build_report.py --posts all-posts.xlsx --old Ветки_threads.xlsx --profiles all-profiles.xlsx --out report.xlsx
+  (окно: --months 3 по умолчанию, до даты самого свежего поста; либо явно --from 2026-08-01 --to 2026-10-31)
+Оба файла берутся за один и тот же промежуток; всё остальное считается только внутри него.
 
-Логика (единая, не зависит от того, классифицированы ли посты):
+Логика:
   * страна поста  = about_country автора из all-profiles (сопоставление по username, без регистра);
-  * класс поста   = category_id поста, если он заполнен; иначе category_id автора из all-profiles;
-  * «Подходит»    = да, если класс из PASS_CLASSES (Барахолка, Витрина, Перекупщик, Домовой чат, Услуги);
-                    нет — для Новости / Прочее (и старых Не подходит, Неизвестно, Репосты);
-                    «не классифицирован» — если класса нет ни у поста, ни у автора. Это НЕ «нет»:
-                    такие посты в «подходящих» не считаются, но и не записываются в «неподходящие»;
-  * старый файл: если есть колонка «Подходит», берётся она (ручная/прошлая разметка), иначе считается по классу.
-Меняется логика — правьте блок НАСТРОЙКИ ниже, остальной код трогать не нужно.
+  * класс поста   = category_id поста, если он заполнен; иначе category_id автора из all-profiles
+                    (в старом файле берётся колонка «Класс»); нет ни там ни там = «не классифицирован»;
+  * авторы по числу веток = сколько авторов имеют в выборке не менее 1 / 2 / 3 уникальных веток.
+Меняется логика классов — правьте блок НАСТРОЙКИ ниже, остальной код трогать не нужно.
 """
-import argparse, re, sys
+import argparse, sys
 import pandas as pd
 from openpyxl import Workbook
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.chart import BarChart, LineChart, Reference
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 # ============================== НАСТРОЙКИ ==============================
 HOME_COUNTRY = 'KZ'
+MIN_POSTS_LEVELS = (1, 2, 3)   # пороги «автор с не менее N ветками»
 # все варианты написания категории (id, code, русское имя) -> каноническое имя
 CATEGORY_ALIASES = {
     '1': 'Витрина', 'vitrina': 'Витрина', 'витрина': 'Витрина',
@@ -34,7 +35,6 @@ CATEGORY_ALIASES = {
     '7': 'Прочее', 'other': 'Прочее', 'прочее': 'Прочее',
     'не подходит': 'Не подходит', 'неизвестно': 'Неизвестно', 'репосты': 'Репосты',   # только старый файл
 }
-PASS_CLASSES = {'Барахолка', 'Витрина', 'Перекупщик', 'Домовой чат', 'Услуги'}
 # ========================================================================
 
 if hasattr(sys.stdout, 'reconfigure'):
@@ -55,151 +55,174 @@ def code_of(df):
 
 def ukey(s): return s.astype(str).str.strip().str.lstrip('@').str.lower()
 
-def city_of(s):
-    first = s.fillna('').astype(str).str.split(',').str[0].str.strip()
-    first = first.str.replace(r'^[A-Z]{2}\s*', '', regex=True).str.strip()
-    return first.replace('', '(город не указан)')
+def num(df, col):
+    return pd.to_numeric(df[col] if col in df else pd.Series(0, index=df.index), errors='coerce').fillna(0)
+
+def author_counts(d):
+    """автор (ukey) -> число уникальных веток (по коду поста)."""
+    u = d[d['code_key'].isna() | ~d['code_key'].duplicated()]
+    return u.groupby('ukey').size()
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--posts', required=True); ap.add_argument('--old', required=True)
 ap.add_argument('--profiles', required=True); ap.add_argument('--out', required=True)
+ap.add_argument('--months', type=int, default=3, help='длина окна отчёта в месяцах (по умолчанию 3)')
+ap.add_argument('--from', dest='date_from', help='начало окна YYYY-MM-DD (по умолчанию конец окна минус --months)')
+ap.add_argument('--to', dest='date_to', help='конец окна YYYY-MM-DD включительно (по умолчанию дата самого свежего поста)')
 a = ap.parse_args()
 
 # ---------------- загрузка ----------------
 new = read_first(a.posts); old = read_first(a.old); prof = read_first(a.profiles, 'all-profiles')
+prof_all = prof.copy()   # все профили как есть, для листа «Все авторы»
 for df in (new, old):
     df['code_key'] = code_of(df); df['ukey'] = ukey(df['author_username'])
-    df['likes_n'] = pd.to_numeric(df.get('likes'), errors='coerce').fillna(0)
-    df['replies_n'] = pd.to_numeric(df.get('reply_count'), errors='coerce').fillna(0)
+    df['likes_n'] = num(df, 'likes'); df['replies_n'] = num(df, 'reply_count')
     df['date'] = pd.to_datetime(df['date_utc'].astype(str).str[:10], errors='coerce')
+
+# ---------------- единое окно периода для обоих файлов ----------------
+win_end = pd.Timestamp(a.date_to) if a.date_to else max(d.date.max() for d in (new, old) if d.date.notna().any())
+win_start = pd.Timestamp(a.date_from) if a.date_from else (win_end - pd.DateOffset(months=a.months) + pd.Timedelta(days=1))
+WIN = f'{win_start:%d.%m.%Y} – {win_end:%d.%m.%Y}'
+before = (len(old), len(new))
+old = old[(old.date >= win_start) & (old.date <= win_end)].copy()
+new = new[(new.date >= win_start) & (new.date <= win_end)].copy()
+print(f'Окно отчёта: {WIN}. Постов в окне: прошлый {len(old)} из {before[0]}, новый {len(new)} из {before[1]} '
+      f'(посты без даты и вне окна исключены)')
 
 prof['ukey'] = ukey(prof['username'])
 prof = prof.drop_duplicates('ukey')
 prof['prof_cat'] = canon_cat(prof['category_id'])
-prof['city'] = city_of(prof.get('text_location'))
 P = prof.set_index('ukey')
 
 def enrich(df, is_old):
     has_prof = df['ukey'].isin(P.index)
     df['Страна'] = df['ukey'].map(P['about_country']).fillna('не определена').where(has_prof, 'нет профиля')
-    df['Город автора'] = df['ukey'].map(P['city'])
-    df['Подписчиков у автора'] = pd.to_numeric(df['ukey'].map(P['followers_count']), errors='coerce')
-    own = canon_cat(df['Класс']) if is_old else canon_cat(df.get('category_id', pd.Series(index=df.index, dtype=str)))
+    col = 'Класс' if is_old else 'category_id'
+    own = canon_cat(df[col]) if col in df else pd.Series(index=df.index, dtype=object)
     df['Класс (итог)'] = own.fillna(df['ukey'].map(P['prof_cat'])).fillna('не классифицирован')
-    derived = df['Класс (итог)'].isin(PASS_CLASSES).map({True: 'да', False: 'нет'}).where(df['Класс (итог)'] != 'не классифицирован', 'не классифицирован')
-    if is_old and 'Подходит' in df:
-        df['Подходит (итог)'] = df['Подходит'].str.strip().str.lower().where(df['Подходит'].notna(), derived)
-    else:
-        df['Подходит (итог)'] = derived
     df['KZ'] = df['Страна'].eq(HOME_COUNTRY)
     df['Классифицирован'] = df['Класс (итог)'].ne('не классифицирован')
     df['Страна известна'] = ~df['Страна'].isin(['нет профиля', 'не определена'])
-    df['OK'] = df['Подходит (итог)'].eq('да')
     return df
 old = enrich(old, True); new = enrich(new, False)
 
 old_codes, new_codes = set(old['code_key'].dropna()), set(new['code_key'].dropna())
-new['Новый пост (не было в прошлом файле)'] = ~new['code_key'].isin(old_codes)
+new['Новый пост (не было в прошлом файле)'] = (~new['code_key'].isin(old_codes)).map({True: 'да', False: 'нет'})
 
 # ---------------- метрики ----------------
-allpost_keys = old['code_key'].dropna().tolist() + new['code_key'].dropna().tolist()
-union_posts = len(set(allpost_keys)); union_auth = len(set(old.ukey) | set(new.ukey))
+union_posts = len(old_codes | new_codes); union_auth = len(set(old.ukey) | set(new.ukey))
 n_kz_prof = int(prof['about_country'].eq(HOME_COUNTRY).sum())
 
+def lvl_name(n): return f'Авторов с не менее {n} {"веткой" if n == 1 else "ветками"}'
+
 def metrics(d):
-    ok = d[d.OK]; kz = d[d.KZ]; okkz = d[d.OK & d.KZ]
-    return {
-        'Постов (веток) всего': len(d),
-        'Уникальных авторов': d.ukey.nunique(),
+    kz = d[d.KZ]; cnt = author_counts(d)
+    m = {'Постов (веток) всего': len(d)}
+    for n in MIN_POSTS_LEVELS:
+        m[lvl_name(n)] = int((cnt >= n).sum())
+    m.update({
         'Постов авторов из Казахстана (страна по профилю)': len(kz),
         'Авторов из Казахстана (страна по профилю)': kz.ukey.nunique(),
         'Постов, у которых известна страна автора': int(d['Страна известна'].sum()),
         'Постов с известным классом': int(d['Классифицирован'].sum()),
-        'Подходящих постов (только среди классифицированных)': len(ok),
-        'Подходящих авторов (только среди классифицированных)': ok.ukey.nunique(),
-        'Подходящих постов из Казахстана': len(okkz),
         'Лайков суммарно': int(d.likes_n.sum()),
         'Комментариев суммарно': int(d.replies_n.sum()),
-    }
+    })
+    return m
 mo, mn = metrics(old), metrics(new)
 kpi = pd.DataFrame({'Показатель': list(mo), 'Прошлый файл': list(mo.values()), 'Сейчас': list(mn.values())})
-# строки про накопленную базу: прошлый файл -> прошлый + новый без дублей
+# накопленная база: прошлый файл -> прошлый + новый без дублей
 extra = pd.DataFrame([
-    ['Накопленная база: уникальных постов (прошлый + новый, без дублей)', len(old), union_posts],
+    ['Накопленная база: уникальных постов (прошлый + новый, без дублей)', len(old_codes), union_posts],
     ['Накопленная база: уникальных авторов (прошлый + новый)', old.ukey.nunique(), union_auth],
     ['Профилей авторов из Казахстана в базе профилей', old[old.KZ].ukey.nunique(), n_kz_prof],
 ], columns=kpi.columns)
-kpi = pd.concat([kpi.iloc[:2], extra, kpi.iloc[2:]], ignore_index=True)
+k0 = 1 + len(MIN_POSTS_LEVELS)
+kpi = pd.concat([kpi.iloc[:k0], extra, kpi.iloc[k0:]], ignore_index=True)
 kpi['Прирост, абс.'] = kpi['Сейчас'] - kpi['Прошлый файл']
 kpi['Рост, раз'] = (kpi['Сейчас'] / kpi['Прошлый файл'].where(kpi['Прошлый файл'] > 0)).round(2)
+N_CHART = k0 + len(extra)   # строки-счётчики для диаграммы (посты, авторы по порогам, накопленная база)
+
+fmt_d = lambda x: f'{x:%d.%m.%Y}' if pd.notna(x) else '—'
+dates = pd.DataFrame([
+    ['Самый старый пост', fmt_d(old.date.min()), fmt_d(new.date.min())],
+    ['Самый свежий пост', fmt_d(old.date.max()), fmt_d(new.date.max())],
+], columns=['Показатель', 'Прошлый файл', 'Сейчас'])
+kpi = pd.concat([kpi, dates], ignore_index=True)
+
 cov = lambda d, c: f"{d[c].mean():.0%}"
-notes = {
+notes = {lvl_name(n): f'авторы, у которых в выборке не менее {n} уникальных веток (по коду поста)' for n in MIN_POSTS_LEVELS}
+notes.update({
     'Постов, у которых известна страна автора': f"покрытие: прошлый {cov(old,'Страна известна')}, сейчас {cov(new,'Страна известна')}. Остальные авторы без профиля — страна неизвестна, это НЕ «не Казахстан»",
-    'Постов с известным классом': f"покрытие: прошлый {cov(old,'Классифицирован')}, сейчас {cov(new,'Классифицирован')}. Посты не классифицированы — сравнивать «подходящие» корректно нельзя",
-    'Подходящих постов (только среди классифицированных)': 'нижняя граница; в новом файле большая часть постов ещё без класса',
-    'Подходящих авторов (только среди классифицированных)': 'нижняя граница',
+    'Постов с известным классом': f"покрытие: прошлый {cov(old,'Классифицирован')}, сейчас {cov(new,'Классифицирован')}. Остальные посты без класса",
     'Постов авторов из Казахстана (страна по профилю)': 'нижняя граница: страна известна не у всех авторов',
     'Авторов из Казахстана (страна по профилю)': 'нижняя граница',
-    'Подходящих постов из Казахстана': 'нижняя граница',
     'Профилей авторов из Казахстана в базе профилей': 'прошлый = авторы старого файла с KZ-профилем; сейчас = все KZ-профили в all-profiles',
-}
+    'Самый старый пост': 'по date_utc, дата без времени',
+    'Самый свежий пост': 'по date_utc, дата без времени',
+})
 kpi['Примечание'] = kpi['Показатель'].map(notes).fillna('')
-HEAD = ['Постов (веток) всего', 'Уникальных авторов',
-        'Накопленная база: уникальных постов (прошлый + новый, без дублей)',
-        'Профилей авторов из Казахстана в базе профилей']
-N_CHART = 7   # первые 7 строк = счётчики без охвата/классов/лайков
+HEAD = ['Постов (веток) всего'] + [lvl_name(n) for n in MIN_POSTS_LEVELS] + [
+    'Накопленная база: уникальных постов (прошлый + новый, без дублей)',
+    'Профилей авторов из Казахстана в базе профилей']
 
 overlap = pd.DataFrame([
     ['Постов в новом файле', len(new)],
-    ['  из них уже были в прошлом файле', int((~new['Новый пост (не было в прошлом файле)']).sum())],
-    ['  из них НОВЫХ', int(new['Новый пост (не было в прошлом файле)'].sum())],
+    ['  из них уже были в прошлом файле', int((new['Новый пост (не было в прошлом файле)'] == 'нет').sum())],
+    ['  из них НОВЫХ', int((new['Новый пост (не было в прошлом файле)'] == 'да').sum())],
     ['Постов прошлого файла, которых нет в новом', len(old_codes - new_codes)],
     ['Новых авторов (не было в прошлом файле)', len(set(new.ukey) - set(old.ukey))],
-    ['Новых подходящих авторов из Казахстана', len(set(new[new.OK & new.KZ].ukey) - set(old.ukey))],
 ], columns=['Показатель', 'Значение'])
 
 def by(col, name):
-    def agg(d):
-        g = d.groupby(col).agg(posts=('code_key', 'size'), authors=('ukey', 'nunique'))
-        return g
-    o, n = agg(old), agg(new)
-    t = o.join(n, how='outer', lsuffix='_o', rsuffix='_n').fillna(0).astype(int)
+    agg = lambda d: d.groupby(col).agg(posts=('code_key', 'size'), authors=('ukey', 'nunique'))
+    t = agg(old).join(agg(new), how='outer', lsuffix='_o', rsuffix='_n').fillna(0).astype(int)
     t.columns = ['Постов (прошлый)', 'Авторов (прошлый)', 'Постов (сейчас)', 'Авторов (сейчас)']
     t['Рост постов, раз'] = (t['Постов (сейчас)'] / t['Постов (прошлый)'].where(t['Постов (прошлый)'] > 0)).round(2)
     return t.sort_values('Постов (сейчас)', ascending=False).reset_index().rename(columns={col: name})
 
 cat_t = by('Класс (итог)', 'Класс')
 country_t = by('Страна', 'Страна')
-kzok_o, kzok_n = old[old.KZ & old.OK], new[new.KZ & new.OK]
-city_t = (lambda o, n: o.join(n, how='outer', lsuffix='_o', rsuffix='_n').fillna(0).astype(int))(
-    kzok_o.groupby('Город автора').agg(p=('code_key', 'size'), a=('ukey', 'nunique')),
-    kzok_n.groupby('Город автора').agg(p=('code_key', 'size'), a=('ukey', 'nunique')))
-city_t.columns = ['Постов (прошлый)', 'Авторов (прошлый)', 'Постов (сейчас)', 'Авторов (сейчас)']
-city_t = city_t.sort_values('Постов (сейчас)', ascending=False).reset_index().rename(columns={'Город автора': 'Город (подходящие, KZ)'})
 
 wk = lambda d, n: d.dropna(subset=['date']).assign(Неделя=lambda x: x.date.dt.to_period('W').dt.start_time.dt.date).groupby('Неделя').size().rename(n)
 weeks = pd.concat([wk(old, 'Постов (прошлый)'), wk(new, 'Постов (сейчас)')], axis=1).fillna(0).astype(int).sort_index().reset_index()
 weeks['Неделя'] = weeks['Неделя'].astype(str)
 
-top_auth = (new[new.OK & new.KZ].groupby('ukey').agg(Автор=('author_username', 'first'), Постов=('code_key', 'size'),
-            Класс=('Класс (итог)', 'first'), Город=('Город автора', 'first'), Подписчиков=('Подписчиков у автора', 'first'),
-            Лайков=('likes_n', 'sum')).sort_values('Постов', ascending=False).head(50).reset_index(drop=True))
-
 period = lambda d: f"{d.date.min():%d.%m.%Y} – {d.date.max():%d.%m.%Y}" if d.date.notna().any() else '—'
+lv = ', '.join(str(n) for n in MIN_POSTS_LEVELS)
 method = [
- ['Что сравниваем', 'Прошлый файл (разметка веток) и новый выгруженный массив постов'],
- ['Период прошлого файла', period(old)], ['Период нового файла', period(new)],
- ['Страна автора', f'about_country из all-profiles; «{HOME_COUNTRY}» = Казахстан; нет профиля = автор не найден в all-profiles'],
- ['Класс поста', 'category_id поста; если пусто — category_id автора (профиля)'],
- ['Подходит', 'Да для: ' + ', '.join(sorted(PASS_CLASSES)) + '. Нет для Новости, Прочее (в прошлом файле: Не подходит, Неизвестно, Репосты)'],
- ['Не классифицирован', 'Нет класса ни у поста, ни у автора (нет профиля или профиль не классифицирован). Не считается ни «подходит», ни «не подходит»; показатели «подходящих» — нижняя граница'],
- ['Страна неизвестна', 'Автор не найден в all-profiles или у профиля пустая страна. Не считается «не Казахстан»'],
- ['Накопленная база', 'Уникальные посты/авторы старого и нового файлов вместе (пересечение по коду поста учтено один раз)'],
- ['Прошлый файл', 'Если в нём есть колонка «Подходит» — используется она'],
- ['Сопоставление постов', 'По коду поста (code / хвост url после /post/)'],
- ['Сопоставление авторов', 'По username без учёта регистра'],
+ ['Общее', 'Что сравниваем', 'Прошлый файл (разметка веток) и новый выгруженный массив постов (all-posts) с данными профилей (all-profiles)'],
+ ['Общее', 'Окно отчёта', f'{WIN}: один и тот же промежуток для обоих файлов (по умолчанию {a.months} мес. до даты самого свежего поста; задаётся --months, --from, --to). Границы включительно'],
+ ['Общее', 'Что попадает в окно', 'Только ветки с date_utc внутри окна; ветки без даты и вне окна исключены из всех метрик, листов и из списка постов. Профили в «Все авторы» не фильтруются, число веток автора считается внутри окна'],
+ ['Общее', 'Период прошлого файла', period(old) + ' (внутри окна)'],
+ ['Общее', 'Период нового файла', period(new) + ' (внутри окна)'],
+ ['Общее', 'Ветка / пост', 'Одна строка файла = одна ветка (запись верхнего уровня). Ветки считаются по коду поста'],
+ ['Источники', 'Новый файл (all-posts)', 'Используются колонки: code/url, author_username, date_utc, likes, reply_count, category_id'],
+ ['Источники', 'Прошлый файл', 'Используются те же колонки; класс берётся из колонки «Класс». Остальные колонки прошлой разметки на листе «Посты прошлый файл» сохранены как есть'],
+ ['Источники', 'Профили (all-profiles)', 'Используются колонки: username, about_country, category_id. Профили дедуплицируются по username без регистра и @'],
+ ['Сопоставление', 'Постов', 'По коду поста (колонка code или хвост url после /post/)'],
+ ['Сопоставление', 'Авторов', 'По username без учёта регистра и без @'],
+ ['Сопоставление', 'Накопленная база', 'Уникальные посты/авторы старого и нового файлов вместе; пересечение по коду поста считается один раз'],
+ ['Определения', 'Страна автора', f'about_country из all-profiles; «{HOME_COUNTRY}» = Казахстан. «нет профиля» = автор не найден в all-profiles; «не определена» = профиль есть, страна пустая'],
+ ['Определения', 'Страна неизвестна', 'Автор без профиля или с пустой страной. Это НЕ «не Казахстан», поэтому показатели по Казахстану — нижняя граница'],
+ ['Определения', 'Класс поста', 'category_id поста (id, код или русское имя приводятся к одному названию); если пусто — category_id автора из профиля'],
+ ['Определения', 'Не классифицирован', 'Нет класса ни у поста, ни у автора (нет профиля или профиль не классифицирован)'],
+ ['Определения', 'Авторы с не менее N ветками', f'Для порогов {lv}: у автора считаются уникальные ветки (по коду поста) в соответствующем файле, затем подсчитывается, у скольких авторов их не менее N. Порог 1 = все уникальные авторы файла'],
+ ['Определения', 'Самый старый / самый свежий пост', 'Минимум и максимум date_utc по файлу (дата без времени); посты без даты не учитываются'],
+ ['Определения', 'Лайки и комментарии', 'Сумма likes и reply_count по всем веткам файла; пустые значения считаются нулём'],
+ ['Расчёты', 'Прирост, абс.', 'Сейчас минус Прошлый файл (для дат не считается)'],
+ ['Расчёты', 'Рост, раз', 'Сейчас / Прошлый файл, округлено до сотых; пусто, если в прошлом файле значение 0'],
+ ['Расчёты', 'Новые посты', 'Посты нового файла, кода которых нет в прошлом файле (лист «Сводка», блок «Что нового»)'],
+ ['Расчёты', 'Динамика', 'Число веток по неделям (неделя начинается с понедельника) отдельно для прошлого и нового файла'],
+ ['Листы', 'Сводка', 'Ключевые метрики (в т. ч. авторы по порогам веток, самый старый и свежий пост), что нового, диаграмма'],
+ ['Листы', 'По классам / По странам', 'Число постов и авторов по итоговому классу и по стране автора, прошлый файл против нового'],
+ ['Листы', 'Динамика', 'Посты по неделям'],
+ ['Листы', 'Посты сейчас', 'Новый файл целиком (все исходные колонки) + колонки Страна, Класс (итог), Новый пост'],
+ ['Листы', 'Посты прошлый файл', 'Прошлый файл целиком (все исходные колонки) + колонки Страна, Класс (итог)'],
+ ['Листы', 'Все авторы', 'Все профили из all-profiles (все исходные колонки) + авторы постов без профиля; число веток автора в новом и прошлом файле; признак «Есть профиль»'],
+ ['Ограничения', 'Нижние границы', 'Показатели по Казахстану считаются только по авторам с известной страной; значения в исходных файлах не корректируются'],
 ]
-meth = pd.DataFrame(method, columns=['Параметр', 'Описание'])
+meth = pd.DataFrame(method, columns=['Раздел', 'Параметр', 'Описание'])
 
 # ---------------- запись Excel ----------------
 wb = Workbook(); HDR = PatternFill('solid', fgColor='1F4E78'); KPI_FILL = PatternFill('solid', fgColor='E2EFDA')
@@ -211,10 +234,12 @@ def put(ws, df, r0=1, c0=1, title=None, fmt=True):
         c.alignment = Alignment(wrap_text=True, vertical='center')
     for i, row in enumerate(df.itertuples(index=False), 1):
         for j, v in enumerate(row):
-            if pd.isna(v) if not isinstance(v, (list, tuple)) else False: v = None
+            if not isinstance(v, (list, tuple)) and pd.isna(v): v = None
             if hasattr(v, 'item'): v = v.item()
+            if isinstance(v, str): v = ILLEGAL_CHARACTERS_RE.sub('', v)[:32767]   # лимит Excel и недопустимые символы
             c = ws.cell(r0 + i, c0 + j, v)
-            if fmt and isinstance(v, (int, float)): c.number_format = '#,##0.##'
+            if isinstance(v, str) and v.startswith('='): c.data_type = 's'   # текст, а не формула
+            if fmt and isinstance(v, (int, float)) and not isinstance(v, bool): c.number_format = '#,##0.##'
     return r0, r0 + len(df)
 def widths(ws, mx=60, cap=200):
     for i, col in enumerate(ws.columns, 1):
@@ -223,7 +248,7 @@ def widths(ws, mx=60, cap=200):
 
 ws = wb.active; ws.title = 'Сводка'
 ws['A1'] = 'Расширение выборки Threads: прошлый файл vs текущая выгрузка'; ws['A1'].font = Font(bold=True, size=15)
-ws['A2'] = f"Прошлый файл: {period(old)} · Новый: {period(new)}"
+ws['A2'] = f"Окно отчёта: {WIN} · Прошлый файл: {period(old)} · Новый: {period(new)}"
 r = 4
 for k in HEAD:
     row = kpi[kpi['Показатель'] == k].iloc[0]
@@ -242,9 +267,12 @@ ws.add_chart(ch, 'H4')
 widths(ws, 55)
 ws.column_dimensions['A'].width = 52
 
-def sheet(name, df, title=None, chart=None, **kw):
+def sheet(name, df, title=None, chart=None, wrap=False, **kw):
     w = wb.create_sheet(name); h0, h1 = put(w, df, 1, 1, title); w.freeze_panes = w.cell(h0 + 1, 1)
     widths(w, **kw)
+    if wrap:
+        for row in w.iter_rows(min_row=h0 + 1):
+            for c in row: c.alignment = Alignment(wrap_text=True, vertical='top')
     if chart:
         c = BarChart() if chart[0] == 'bar' else LineChart(); c.title = title or name; c.height, c.width = 9, 22
         c.add_data(Reference(w, min_col=chart[1], max_col=chart[2], min_row=h0, max_row=min(h1, h0 + chart[3])), titles_from_data=True)
@@ -253,15 +281,26 @@ def sheet(name, df, title=None, chart=None, **kw):
     return w
 sheet('По классам', cat_t, 'Посты по классам')
 sheet('По странам', country_t, 'Посты по странам авторов')
-sheet('Города KZ', city_t, 'Подходящие посты из Казахстана по городам', ('bar', 2, 4, 15))
 sheet('Динамика', weeks, 'Посты по неделям', ('line', 2, 3, 60))
-sheet('Топ авторов KZ', top_auth, 'Топ-50 подходящих авторов из Казахстана (сейчас)')
-sheet('Методика', meth, 'Методика расчёта', mx=110)
+wm = sheet('Методика', meth, 'Методика расчёта', wrap=True, mx=110)
+wm.column_dimensions['A'].width = 16; wm.column_dimensions['B'].width = 38
 
-det_cols = ['code_key', 'url', 'author_username', 'date_utc', 'likes', 'reply_count', 'Страна', 'Город автора', 'Класс (итог)', 'Подходит (итог)']
-d_new = new[det_cols + ['Новый пост (не было в прошлом файле)', 'filter_status']].rename(columns={'code_key': 'code'})
-d_old = old[det_cols].rename(columns={'code_key': 'code'})
-for nm, d in (('Посты сейчас', d_new), ('Посты прошлый файл', d_old)):
+# ---- полные данные: исходные колонки + расчётные, без служебных ----
+HELPERS = ['code_key', 'ukey', 'likes_n', 'replies_n', 'date', 'KZ', 'Классифицирован', 'Страна известна']
+def full(d): return d.drop(columns=[c for c in HELPERS if c in d.columns])
+
+# все авторы: все профили + авторы постов без профиля, с числом веток
+cnt_new, cnt_old = author_counts(new), author_counts(old)
+authors = prof_all.copy(); k = ukey(authors['username'])
+authors['Есть профиль'] = 'да'
+missing = sorted((set(cnt_new.index) | set(cnt_old.index)) - set(k))
+name_of = pd.concat([new, old]).drop_duplicates('ukey').set_index('ukey')['author_username']
+authors = pd.concat([authors, pd.DataFrame({'username': [name_of[u] for u in missing], 'Есть профиль': 'нет'})], ignore_index=True)
+k = ukey(authors['username'])
+authors['Постов сейчас'] = k.map(cnt_new).fillna(0).astype(int)
+authors['Постов прошлый файл'] = k.map(cnt_old).fillna(0).astype(int)
+
+for nm, d in (('Посты сейчас', full(new)), ('Посты прошлый файл', full(old)), ('Все авторы', authors)):
     w = wb.create_sheet(nm); put(w, d.astype(object).where(d.notna(), None), fmt=False)
     w.freeze_panes = 'A2'; w.auto_filter.ref = w.dimensions; widths(w, 50)
 wb.save(a.out)

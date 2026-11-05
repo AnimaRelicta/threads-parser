@@ -48,6 +48,10 @@ class Settings:
     search_output_dir: Path = ROOT / "output" / "search"
     search_workers: int = 3
     search_window_days: int = 0
+    # --- scripts/postlist.py: сбор веток по списку ссылок ----------------------
+    posts_file: Path = ROOT / "data" / "threads_posts.txt"
+    posts_workers: int = 3
+    posts_delay: float = 0.3
 
     # --- LLM-классификация профилей (scripts/classify/) ----------------------
     llm_proxy_url: str | None = None  # LLM_PROXY_URL
@@ -177,6 +181,9 @@ def load_settings() -> Settings:
         search_output_dir=_path(get("SEARCH_OUTPUT_DIR"), ROOT / "output" / "search"),
         search_workers=max(1, _int(get("SEARCH_WORKERS"), 3)),
         search_window_days=max(0, _int(get("SEARCH_WINDOW_DAYS"), 0)),
+        posts_file=_path(get("POSTS_FILE"), ROOT / "data" / "threads_posts.txt"),
+        posts_workers=max(1, _int(get("POSTS_WORKERS"), 3)),
+        posts_delay=max(0.0, _float(get("POSTS_DELAY"), 0.3)),
         llm_proxy_url=(get("LLM_PROXY_URL") or "").strip() or None,
         llm_proxy_api_key=(get("LLM_PROXY_API_KEY") or "").strip() or None,
         llm_model=(get("LLM_MODEL") or "").strip() or None,
