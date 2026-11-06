@@ -8,6 +8,7 @@
     uv run scripts/dbadmin.py import-accounts   # перенести аккаунты из data/accounts.json
     uv run scripts/dbadmin.py import-profiles   # перенести posts.json, anchor.json и др. профилей
     uv run scripts/dbadmin.py import-search     # перенести posts.jsonl и jobs.json поиска
+    uv run scripts/dbadmin.py merge-old-profiles  # дополнить threads.profiles из старой БД threads_old (--dry-run)
     uv run scripts/cli.py db migrate      # то же через единую точку входа
 
 Строка подключения берётся из DATABASE_URL в scripts/.env.
@@ -21,8 +22,9 @@ from config import load_settings
 from db.accounts import import_legacy
 from db.geo import fix_encoding
 from db.legacy import import_profiles, import_search
+from db.merge_old import connect_old, merge_old_profiles, old_url_from
 from db.migrate import migrate, status
-from db.pool import run_sync
+from db.pool import require_url, run_sync
 
 
 def cmd_migrate(st) -> None:
@@ -102,6 +104,35 @@ def cmd_import_search(st, root: Path | None) -> None:
     print(f"[+] Постов перенесено: {r['posts']} (уже были в БД: {r['posts_kept']})")
 
 
+def cmd_merge_old_profiles(st, args) -> None:
+    """Дополняет пустые поля threads.profiles данными threads_old.profiles (по нику)."""
+    old_url = old_url_from(require_url(st), args.old_url)
+
+    async def _run(conn):
+        old = await connect_old(old_url)
+        try:
+            return await merge_old_profiles(
+                conn, old, args.columns, args.exclude, args.overwrite, args.dry_run
+            )
+        finally:
+            await old.close()
+
+    r = run_sync(st, _run)
+    print(f"[*] Профилей в обеих схемах: {r['matched']}; только в threads_old: {r['only_old']}")
+    for col, why in r["skipped"].items():
+        print(f"    пропущена колонка {col}: {why}")
+    if not r["filled"]:
+        print("[*] Заполнять нечего")
+        return
+    print("[*] Значений " + ("будет внесено" if args.dry_run else "внесено") + " по колонкам:")
+    for col, n in sorted(r["filled"].items(), key=lambda kv: -kv[1]):
+        print(f"    {col}: {n}")
+    if args.dry_run:
+        print("[*] --dry-run: ничего не записано")
+    else:
+        print(f"[+] Обновлено профилей: {r['updated']}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Postgres: миграции и состояние")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -116,10 +147,27 @@ def main() -> None:
     ip.add_argument("profiles", nargs="*", help="только эти профили (по умолчанию все)")
     isr = sub.add_parser("import-search", help="перенести posts.jsonl и jobs.json поиска в БД")
     isr.add_argument("--dir", type=Path, help="по умолчанию SEARCH_OUTPUT_DIR из .env")
+    mo = sub.add_parser(
+        "merge-old-profiles", help="дополнить threads.profiles данными из старой БД threads_old"
+    )
+    mo.add_argument(
+        "--old-url",
+        help="адрес старой БД (по умолчанию DATABASE_URL с именем базы threads_old)",
+    )
+    mo.add_argument("--dry-run", action="store_true", help="только посчитать, ничего не писать")
+    mo.add_argument("--columns", nargs="+", help="только эти колонки (по умолчанию все общие)")
+    mo.add_argument("--exclude", nargs="+", help="не трогать эти колонки")
+    mo.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="перезаписывать и заполненные значения (по умолчанию только пустые)",
+    )
     args = ap.parse_args()
     st = load_settings()
     try:
-        if args.cmd == "import-search":
+        if args.cmd == "merge-old-profiles":
+            cmd_merge_old_profiles(st, args)
+        elif args.cmd == "import-search":
             cmd_import_search(st, args.dir)
         elif args.cmd == "import-profiles":
             cmd_import_profiles(st, args.dir, args.profiles or None)

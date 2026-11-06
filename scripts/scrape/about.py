@@ -9,14 +9,14 @@ import re
 
 from playwright.async_api import Error as PlaywrightError
 
-from core.about import About, parse_about
+from core.about import KNOWN_LABELS, About, parse_about
 from core.logs import log
 
 # Значок «···» в шапке профиля: div[role=button] с svg-заголовком «Ещё»/«More». Таких кнопок
 # на странице несколько (левая панель, шапка, меню каждого поста), поэтому выбираем по
 # геометрии: не в левой панели и выше остальных (по записи кликов шапка стоит над постами).
 MENU_ITEM = re.compile(r"^(Об этом профиле|About this profile)$", re.I)
-MAX_ICONS = 3  # сколько верхних кнопок «···» пробуем, прежде чем сдаться
+MAX_ICONS = 1  # сколько верхних кнопок «···» пробуем, прежде чем сдаться
 SIDEBAR_SHARE = 0.15  # левая панель: центр кнопки левее этой доли ширины окна
 
 FIND_ICONS_JS = r"""
@@ -24,9 +24,10 @@ FIND_ICONS_JS = r"""
     const out = [];
     for (const svg of document.querySelectorAll('svg')) {
         const t = svg.querySelector(':scope > title');
-        const name = t && t.textContent.trim();
-        if (name !== 'Ещё' && name !== 'More') continue;
         const btn = svg.closest('[role="button"], button') || svg;
+        const name = ((t && t.textContent) || svg.getAttribute('aria-label')
+                      || btn.getAttribute('aria-label') || '').trim();
+        if (name !== 'Ещё' && name !== 'More') continue;
         const r = btn.getBoundingClientRect();
         if (r.width < 1 || r.height < 1) continue;
         out.push({x: r.x + r.width / 2, y: r.y + r.height / 2, popup: btn.getAttribute('aria-haspopup'),
@@ -36,37 +37,92 @@ FIND_ICONS_JS = r"""
 }
 """
 
-# Строки окна: Threads рисует их списком <ul><li>, в каждом <li> первый текстовый лист это
-# заголовок («Дата регистрации»), остальные это значение. Классы и жирность не используем:
-# они генерируются (x1lliihq...) и меняются. Если окна нет, возвращаем [] (по этому
-# _close понимает, что окно закрыто).
+# Строки окна читаем без опоры на вёрстку (классы, <li>, wbloks генерируются и меняются).
+# Берём листья с текстом в порядке документа и собираем пары «заголовок -> значение»:
+#   1) заголовок: лист из списка известных заголовков (KNOWN_LABELS, аргумент known);
+#   2) иначе: жирный лист, за которым идёт не жирный (новые, ещё неизвестные строки);
+#   3) значение: все листья до следующего заголовка (кнопки и svg пропускаем).
+# Если так ничего не нашлось, пробуем старую схему <li>. Из нескольких окон на странице
+# берём то, где строк больше. Нет окна: [] (по этому _close понимает, что оно закрыто).
 READ_ROWS_JS = r"""
-() => {
-    const dialogs = document.querySelectorAll('[role="dialog"]');
-    if (!dialogs.length) return [];
-    const root = dialogs[dialogs.length - 1];
+(known) => {
+    const knownSet = new Set(known.map(s => s.toLowerCase()));
     const clean = s => (s || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
-    const rows = [], seen = new Set();
-    for (const li of root.querySelectorAll('li')) {
-        const texts = [];
-        for (const el of li.querySelectorAll('div, span')) {
-            if (el.children.length) continue;  // только листья с собственным текстом
+    const tidy = s => s.replace(/\(\s+/g, '(').replace(/\s+\)/g, ')').replace(/@\s+/g, '@');
+    const roots = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"]')];
+    if (!roots.length) return [];
+
+    const leaves = root => {
+        const out = [];
+        for (const el of root.querySelectorAll('*')) {
+            if (el.children.length) continue;
+            if (el.closest('svg, button, [role="button"], script, style')) continue;
             const t = clean(el.textContent);
-            if (t) texts.push(t);
+            if (!t) continue;
+            const w = parseInt(getComputedStyle(el).fontWeight, 10) || 400;
+            out.push({t, bold: w >= 600});
         }
-        if (texts.length < 2) continue;
-        const label = texts[0], value = texts.slice(1).join(' ');
-        if (seen.has(label)) continue;
-        seen.add(label);
-        rows.push([label, value]);
+        return out;
+    };
+
+    const byLabels = root => {
+        const items = leaves(root);
+        const isLabel = (it, i) => {
+            if (knownSet.has(it.t.toLowerCase())) return true;
+            const nx = items[i + 1];
+            return it.bold && it.t.length <= 40 && !!nx && !nx.bold && !knownSet.has(nx.t.toLowerCase());
+        };
+        const rows = [], seen = new Set();
+        let label = null, parts = [];
+        const flush = () => {
+            if (label && parts.length && !seen.has(label)) {
+                seen.add(label);
+                rows.push([label, tidy(parts.join(' '))]);
+            }
+        };
+        items.forEach((it, i) => {
+            if (isLabel(it, i)) { flush(); label = it.t; parts = []; }
+            else if (label) parts.push(it.t);
+        });
+        flush();
+        return rows;
+    };
+
+    const byLi = root => {
+        const rows = [], seen = new Set();
+        for (const li of root.querySelectorAll('li')) {
+            const texts = [];
+            for (const el of li.querySelectorAll('div, span')) {
+                if (el.children.length) continue;
+                const t = clean(el.textContent);
+                if (t) texts.push(t);
+            }
+            if (texts.length < 2 || seen.has(texts[0])) continue;
+            seen.add(texts[0]);
+            rows.push([texts[0], texts.slice(1).join(' ')]);
+        }
+        return rows;
+    };
+
+    let best = [];
+    for (const root of roots) {
+        let rows = byLabels(root);
+        if (!rows.length) rows = byLi(root);
+        if (rows.length >= best.length) best = rows;
     }
-    return rows;
+    return best;
 }
+"""
+
+# Для диагностики: короткий текстовый снимок окна, когда строк не нашли.
+DIALOG_TEXT_JS = r"""
+() => [...document.querySelectorAll('[role="dialog"], [aria-modal="true"]')]
+    .map(d => (d.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300))
 """
 
 
 async def read_about_rows(page) -> list[list[str]]:
-    return await page.evaluate(READ_ROWS_JS)
+    return await page.evaluate(READ_ROWS_JS, list(KNOWN_LABELS))
 
 
 async def _wait_rows(page, timeout_ms: int) -> list[list[str]]:
@@ -113,7 +169,13 @@ async def fetch_about(page, url: str) -> About | None:
         if not icons:
             log("    [!] «Об этом профиле»: на странице нет кнопки «···» (svg «Ещё»)")
             return None
-        item = page.locator('[role="menuitem"]').filter(has_text=MENU_ITEM).first
+        # роль menuitem у пункта может пропасть (в диагностике role=null): берём и по тексту
+        item = (
+            page.locator('[role="menuitem"]')
+            .filter(has_text=MENU_ITEM)
+            .or_(page.get_by_text(MENU_ITEM))
+            .first
+        )
         for n, ic in enumerate(icons[:MAX_ICONS], 1):
             await page.mouse.click(ic["x"], ic["y"])
             try:
@@ -129,11 +191,17 @@ async def fetch_about(page, url: str) -> About | None:
                 await page.evaluate("window.scrollTo(0, 0)")
                 continue
             rows = await _wait_rows(page, 8000)
+            snap: list[str] = []
+            if not rows:  # снимок текста окна, пока оно открыто (после _close его уже нет)
+                try:
+                    snap = await page.evaluate(DIALOG_TEXT_JS)
+                except PlaywrightError:
+                    pass
             await _close(page, url)
             about = parse_about(rows)
             if about:
                 return about
-            log("    [!] «Об этом профиле»: окно открылось, но строк не нашли")
+            log(f"    [!] «Об этом профиле»: окно открылось, но строк не нашли; текст окон: {snap}")
             return None
         log(
             f"    [!] «Об этом профиле»: пункт не нашли ни в одной из {min(len(icons), MAX_ICONS)} кнопок"

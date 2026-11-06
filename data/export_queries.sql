@@ -18,13 +18,20 @@ LIMIT :limit;
 
 
 -- name: all-posts
--- desc: прочто все листы
-SELECT *
-FROM posts p
-LIMIT 50000;
+SELECT * 
+FROM posts 
+ORDER BY "reply_count" desc 
+LIMIT 100000; 
 
 --name: all-profiles
---desc: профили
-SELECT *
-FROM profiles p
-LIMIT 5000;
+SELECT * 
+FROM profiles 
+ORDER BY "id" asc 
+LIMIT 100000;
+
+--name: about-location
+SELECT about_location, Count(*) 
+FROM profiles 
+GROUP BY about_location 
+ORDER BY "count" desc 
+LIMIT 100000;

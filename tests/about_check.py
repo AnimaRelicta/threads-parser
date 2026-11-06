@@ -58,6 +58,21 @@ async def main() -> int:
         assert a.location == "Беларусь", a.location
         assert len(a.raw) == 3, a.raw
 
+        # 1b. Плоская вёрстка без <li> (жирные span в wbloks), как в диагностике account_002
+        flat = (
+            '<div role="dialog"><div class="wbloks_1"><span>Об этом профиле</span>'
+            '<div><span style="font-weight:700">Имя/название</span><span>Davrenbekov (@davrenbekov.e)</span></div>'
+            '<div><span style="font-weight:700">Дата регистрации</span><span>Август 2024 г. · Более 100 млн</span></div>'
+            '<div><span style="font-weight:700">Новая строка</span><span>Значение</span></div>'
+            '<div><span style="font-weight:700">Местоположение</span><span>Казахстан</span></div>'
+            "</div></div>"
+        )
+        await page.set_content(f"<body>{flat}</body>")
+        a = parse_about(await read_about_rows(page))
+        assert a.name == "Davrenbekov" and a.username == "davrenbekov.e", a
+        assert a.joined == "Август 2024 г." and a.location == "Казахстан", a
+        assert a.raw.get("Новая строка") == "Значение", a.raw
+
         # 2. Сценарий кликов: значок шапки -> меню -> окно -> закрытие
         await page.set_content(MOCK)
         about = await fetch_about(page, "about:blank")

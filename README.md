@@ -19,7 +19,7 @@ threads-parser/
 │   ├── discover.py    # CLI: новые профили по авторам постов и веток (БД, без браузера)
 │   ├── geo.py         # CLI: страна/город профилей КЗ/УЗ (rescan/stats/list, БД, без браузера)
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
-│   ├── dbadmin.py     # CLI: Postgres (migrate/status/import-accounts/import-profiles/import-search)
+│   ├── dbadmin.py     # CLI: Postgres (migrate/status/import-accounts/import-profiles/import-search/merge-old-profiles)
 │   ├── export.py      # CLI: выгрузка из БД в xlsx (базовые и свои запросы)
 │   ├── spam.py        # CLI: спам-профили (проверка по БД, классы 1/2/3, список банов, разбан)
 │   ├── classify/      # пакет: категории профилей через LLM (запуск: cli.py classify)
@@ -641,4 +641,21 @@ uv run scripts/cli.py geo stats                             # топ стран/
 uv run scripts/cli.py geo list --country KZ --city Алматы [--csv файл]
 uv run python tests/geo_check.py                            # проверка без сети и БД
 uv run python tests/textloc_check.py                        # кодировка био, число веток, text_location
+```
+
+### Дополнение профилей из старой БД: `dbadmin.py merge-old-profiles`
+
+Заполняет пустые поля `threads.profiles` значениями из таблицы `threads.profiles` старой базы
+`threads_old` (другая БД на том же сервере; схема и таблица называются так же). Адрес старой БД:
+`DATABASE_URL` с именем базы `threads_old` либо `--old-url`. Профили сопоставляются по
+`lower(username)`; берутся общие колонки с совместимым типом; заполненное не трогается. Служебные
+колонки (id, ключи, состояние обработки) и колонки NOT NULL пропускаются.
+
+```
+uv run scripts/dbadmin.py merge-old-profiles --dry-run   # сколько значений по каждой колонке
+uv run scripts/dbadmin.py merge-old-profiles
+uv run scripts/dbadmin.py merge-old-profiles --old-url postgresql://USER:PASSWORD@localhost:5432/threads_old
+uv run scripts/dbadmin.py merge-old-profiles --columns bio followers_count   # только эти
+uv run scripts/dbadmin.py merge-old-profiles --exclude og_image              # кроме этих
+uv run scripts/dbadmin.py merge-old-profiles --overwrite                     # и заполненные
 ```
