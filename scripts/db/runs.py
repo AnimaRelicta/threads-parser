@@ -11,7 +11,7 @@ from db import accounts as accounts_repo
 
 
 async def start_run(conn: asyncpg.Connection, kind: str, settings: dict) -> int:
-    """Новая запись runs со статусом running. kind: profiles | search | discover | classify."""
+    """Новая запись runs со статусом running. kind: profiles | search | classify (discover остался в CHECK ради старых строк)."""
     return await conn.fetchval(
         "INSERT INTO runs (kind, settings) VALUES ($1, $2) RETURNING id", kind, settings
     )
@@ -45,7 +45,7 @@ async def finish_run(
     summary: dict | None = None,
     error: str | None = None,
 ) -> None:
-    """Закрывает запуск без аккаунтов (discover, classify): итоги дописываются в settings.
+    """Закрывает запуск без аккаунтов (classify): итоги дописываются в settings.
 
     status: ok | error | interrupted. Для запусков с аккаунтами есть finalize_run.
     """

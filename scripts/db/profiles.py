@@ -8,7 +8,7 @@ import asyncpg
 
 from core.consts import USERNAME_RE
 from core.fsio import normalize_username
-from core.geo import DEFAULT_TEXT_SOURCES, Resolved
+from core.geo import Resolved
 from db import posts as repo
 from db.profile_data import save_profile_data
 from db.runs import ensure_profile
@@ -16,8 +16,6 @@ from db.runs import ensure_profile
 SOURCE_SQL = {
     "all": "p.is_target",
     "new": "p.is_target AND NOT EXISTS (SELECT 1 FROM posts t WHERE t.profile_id = p.id)",
-    "search": "p.is_target AND p.discovered_via = 'search'",
-    "authors": "p.is_target AND p.discovered_via = 'author'",
 }
 
 
@@ -64,7 +62,7 @@ WHERE lower(username) = lower($1)
 
 
 def parse_source(value: str) -> tuple[str, list[str]]:
-    """('all'|'new'|'search'|'authors', []) или ('list', [ники]) для «ник1,ник2»."""
+    """('all'|'new', []) или ('list', [ники]) для «ник1,ник2»."""
     v = value.strip()
     if v.lower() in SOURCE_SQL:
         return v.lower(), []
@@ -79,21 +77,14 @@ def parse_source(value: str) -> tuple[str, list[str]]:
     return "list", names
 
 
-async def list_targets(
-    conn: asyncpg.Connection, source: str, review_status: str | None = None
-) -> list[str]:
-    """Ники профилей для запуска: all | new | search | authors | «ник1,ник2».
-
-    search и authors опираются на profiles.discovered_via, review_status на profiles.review_status.
-    """
+async def list_targets(conn: asyncpg.Connection, source: str) -> list[str]:
+    """Ники профилей для запуска: all | new | «ник1,ник2». Из БД берутся только is_target."""
     kind, names = parse_source(source)
     if kind == "list":
         return names
-    where, args = SOURCE_SQL[kind], []
-    if review_status:
-        where += " AND p.review_status = $1"
-        args.append(review_status)
-    rows = await conn.fetch(f"SELECT p.username FROM profiles p WHERE {where} ORDER BY p.id", *args)
+    rows = await conn.fetch(
+        f"SELECT p.username FROM profiles p WHERE {SOURCE_SQL[kind]} ORDER BY p.id"
+    )
     return [r["username"] for r in rows]
 
 
@@ -110,15 +101,9 @@ class ProfileState:
 class ProfileStore:
     """Общий для всех воркеров запуска; media_root = каталог вывода (OUTPUT_DIR)."""
 
-    def __init__(
-        self,
-        pool: asyncpg.Pool,
-        media_root: Path,
-        text_geo_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES,
-    ):
+    def __init__(self, pool: asyncpg.Pool, media_root: Path):
         self.pool = pool
         self.media_root = media_root
-        self.text_geo_sources = text_geo_sources  # откуда брать profiles.text_location
 
     async def load(self, username: str) -> ProfileState:
         async with self.pool.acquire() as conn:
@@ -135,9 +120,7 @@ class ProfileStore:
     ) -> Resolved:
         """Данные профиля одной записью (страница, about, шапка, Instagram) + геосигналы."""
         async with self.pool.acquire() as conn:
-            return await save_profile_data(
-                conn, profile_id, meta, about, header, link, self.text_geo_sources
-            )
+            return await save_profile_data(conn, profile_id, meta, about, header, link)
 
     async def about_fetched(self, profile_id: int) -> bool:
         async with self.pool.acquire() as conn:

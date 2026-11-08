@@ -7,7 +7,6 @@
     uv run scripts/run.py olx_vetka_astana --threads-only --since 7d   # только список веток
     uv run scripts/run.py olx_vetka_astana --fill-threads --since 7d --comments   # разбор этих веток
     uv run scripts/run.py --source new --threads-only --since 7d       # профили без веток
-    uv run scripts/run.py --source new --threads-only --only-class 1,2  # только барахолки и продавцы
     uv run scripts/run.py --threads-only --only-unprocessed            # продолжить: только необработанные
     uv run scripts/run.py olx_vetka_astana --profile-only              # только метаданные профиля
     uv run scripts/run.py --source all --profile-only --headless       # то же для всех профилей из БД
@@ -53,7 +52,7 @@ def build_parser(st) -> argparse.ArgumentParser:
     ap.add_argument(
         "--source",
         help="откуда взять профили из БД: all (is_target), new (ещё без веток), "
-        "search, authors (найдены discover.py) или ники через запятую; "
+        "или ники через запятую; "
         "добавляется к профилю из командной строки и к --file",
     )
     ap.add_argument(

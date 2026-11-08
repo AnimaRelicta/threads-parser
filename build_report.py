@@ -7,13 +7,15 @@
 Оба файла берутся за один и тот же промежуток; всё остальное считается только внутри него.
 
 Логика:
-  * страна поста  = about_country автора из all-profiles (сопоставление по username, без регистра);
+  * страна поста  = страна автора из about_location в all-profiles (KZ/UZ по справочнику core/geo.py,
+                    другое место = OTHER; сопоставление по username, без регистра);
   * класс поста   = category_id поста, если он заполнен; иначе category_id автора из all-profiles
                     (в старом файле берётся колонка «Класс»); нет ни там ни там = «не классифицирован»;
   * авторы по числу веток = сколько авторов имеют в выборке не менее 1 / 2 / 3 уникальных веток.
 Меняется логика классов — правьте блок НАСТРОЙКИ ниже, остальной код трогать не нужно.
 """
 import argparse, sys
+from pathlib import Path
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
@@ -92,6 +94,20 @@ print(f'Окно отчёта: {WIN}. Постов в окне: прошлый {
 prof['ukey'] = ukey(prof['username'])
 prof = prof.drop_duplicates('ukey')
 prof['prof_cat'] = canon_cat(prof['category_id'])
+# Колонки about_country в БД больше нет (миграция 019): страна из about_location, как у geo.resolve
+sys.path.insert(0, str(Path(__file__).parent / 'scripts'))
+from core.geo import find_locations  # noqa: E402
+
+
+def country_of(place):
+    place = '' if pd.isna(place) else str(place).strip()
+    if not place:
+        return None
+    found = find_locations(place)
+    return found[0].country if found else 'OTHER'
+
+
+prof['about_country'] = prof['about_location'].map(country_of) if 'about_location' in prof else None
 P = prof.set_index('ukey')
 
 def enrich(df, is_old):
@@ -199,11 +215,11 @@ method = [
  ['Общее', 'Ветка / пост', 'Одна строка файла = одна ветка (запись верхнего уровня). Ветки считаются по коду поста'],
  ['Источники', 'Новый файл (all-posts)', 'Используются колонки: code/url, author_username, date_utc, likes, reply_count, category_id'],
  ['Источники', 'Прошлый файл', 'Используются те же колонки; класс берётся из колонки «Класс». Остальные колонки прошлой разметки на листе «Посты прошлый файл» сохранены как есть'],
- ['Источники', 'Профили (all-profiles)', 'Используются колонки: username, about_country, category_id. Профили дедуплицируются по username без регистра и @'],
+ ['Источники', 'Профили (all-profiles)', 'Используются колонки: username, about_location (из неё считается страна), category_id. Профили дедуплицируются по username без регистра и @'],
  ['Сопоставление', 'Постов', 'По коду поста (колонка code или хвост url после /post/)'],
  ['Сопоставление', 'Авторов', 'По username без учёта регистра и без @'],
  ['Сопоставление', 'Накопленная база', 'Уникальные посты/авторы старого и нового файлов вместе; пересечение по коду поста считается один раз'],
- ['Определения', 'Страна автора', f'about_country из all-profiles; «{HOME_COUNTRY}» = Казахстан. «нет профиля» = автор не найден в all-profiles; «не определена» = профиль есть, страна пустая'],
+ ['Определения', 'Страна автора', f'страна из about_location в all-profiles; «{HOME_COUNTRY}» = Казахстан. «нет профиля» = автор не найден в all-profiles; «не определена» = профиль есть, страна пустая'],
  ['Определения', 'Страна неизвестна', 'Автор без профиля или с пустой страной. Это НЕ «не Казахстан», поэтому показатели по Казахстану — нижняя граница'],
  ['Определения', 'Класс поста', 'category_id поста (id, код или русское имя приводятся к одному названию); если пусто — category_id автора из профиля'],
  ['Определения', 'Не классифицирован', 'Нет класса ни у поста, ни у автора (нет профиля или профиль не классифицирован)'],

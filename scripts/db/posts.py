@@ -41,34 +41,20 @@ def _size(root: Path | None, rel: str) -> int | None:
         return None
 
 
-async def upsert_topic(conn: asyncpg.Connection, name: str, source: str = "threads") -> int:
-    """id темы (регистр не важен); заводит, если её нет."""
-    return await conn.fetchval(
-        """
-        INSERT INTO topics (name, source) VALUES ($1, $2)
-        ON CONFLICT ((lower(name))) DO UPDATE SET name = topics.name
-        RETURNING id
-        """,
-        name,
-        source,
-    )
-
-
 POST_SQL = """
 INSERT INTO posts (
-    code, url, author_username, profile_id, text, topic_id, date_utc,
+    code, url, author_username, profile_id, text, date_utc,
     likes, reply_count, reposts, quotes, hashtags, mentions,
     videos_skipped, media_failed, visited_reply_count, comments_depth,
     filter_status, filter_matched, filter_matched_in, filter_version,
     first_seen_via, last_refreshed_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
         'profile', now())
 ON CONFLICT (code) DO UPDATE SET
     url = EXCLUDED.url,
     author_username = EXCLUDED.author_username,
     profile_id = EXCLUDED.profile_id,
     text = EXCLUDED.text,
-    topic_id = coalesce(EXCLUDED.topic_id, posts.topic_id),
     date_utc = coalesce(EXCLUDED.date_utc, posts.date_utc),
     likes = EXCLUDED.likes,
     reply_count = EXCLUDED.reply_count,
@@ -148,11 +134,10 @@ async def save_post(
     постов, найденных поиском (у тех нет комментариев и скачанных файлов).
     """
     code = post["code"]
-    topic = post.get("topic")
-    f_status, f_matched, f_in = classify(post.get("text"), topic)
+    # тема из JSON Threads нигде не хранится: она нужна только фильтру (classify)
+    f_status, f_matched, f_in = classify(post.get("text"), post.get("topic"))
     comments = post.get("comments") or []
     async with conn.transaction():
-        topic_id = await upsert_topic(conn, topic) if topic else None
         await conn.execute(
             POST_SQL,
             code,
@@ -160,7 +145,6 @@ async def save_post(
             username,
             profile_id,
             post.get("text"),
-            topic_id,
             parse_dt(post.get("date_utc")),
             post.get("likes"),
             post.get("reply_count"),
@@ -216,8 +200,8 @@ async def load_profile_posts(conn: asyncpg.Connection, profile_id: int) -> list[
     """Посты профиля, собранные профильным пайплайном, в виде прежних словарей posts.json."""
     prow = await conn.fetch(
         """
-        SELECT p.*, t.name AS topic_name
-        FROM posts p LEFT JOIN topics t ON t.id = p.topic_id
+        SELECT p.*
+        FROM posts p
         WHERE p.profile_id = $1 AND p.last_refreshed_at IS NOT NULL
         ORDER BY p.date_utc DESC NULLS LAST, p.code
         """,
@@ -271,7 +255,6 @@ async def load_profile_posts(conn: asyncpg.Connection, profile_id: int) -> list[
             "url": r["url"],
             "date_utc": _iso(r["date_utc"]),
             "text": r["text"],
-            "topic": r["topic_name"],
             "hashtags": list(r["hashtags"]),
             "mentions": list(r["mentions"]),
             "likes": r["likes"],
@@ -367,16 +350,15 @@ _FILTER_OPEN = "posts.last_refreshed_at IS NULL AND EXCLUDED.text IS NOT NULL"
 
 THREAD_LIGHT_SQL = f"""
 INSERT INTO posts (
-    code, url, author_username, author_user_id, profile_id, text, topic_id, date_utc,
+    code, url, author_username, author_user_id, profile_id, text, date_utc,
     likes, reply_count, reposts, quotes, hashtags, mentions,
     filter_status, filter_matched, filter_matched_in, filter_version, first_seen_via)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,'profile')
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'profile')
 ON CONFLICT (code) DO UPDATE SET
     profile_id = coalesce(posts.profile_id, EXCLUDED.profile_id),
     author_user_id = coalesce(posts.author_user_id, EXCLUDED.author_user_id),
     url = {_keep_full("url")},
     text = {_keep_full("text")},
-    topic_id = {_keep_full("topic_id")},
     date_utc = {_keep_full("date_utc")},
     hashtags = CASE WHEN {_FILTER_OPEN} THEN EXCLUDED.hashtags ELSE posts.hashtags END,
     mentions = CASE WHEN {_FILTER_OPEN} THEN EXCLUDED.mentions ELSE posts.mentions END,
@@ -434,13 +416,9 @@ async def save_threads_light(
     """
     rows = []
     async with conn.transaction():
-        topic_ids: dict[str, int] = {}
         for it in items:
-            topic = it.get("topic")
-            if topic and topic not in topic_ids:
-                topic_ids[topic] = await upsert_topic(conn, topic)
             text = it.get("text")
-            f_status, f_matched, f_in = classify(text, topic)
+            f_status, f_matched, f_in = classify(text, it.get("topic"))
             tags, mentions = hashtags_mentions(text)
             rows.append(
                 (
@@ -450,7 +428,6 @@ async def save_threads_light(
                     it.get("author_id"),
                     profile_id,
                     text,
-                    topic_ids.get(topic) if topic else None,
                     parse_dt(iso(it.get("ts"))),
                     it.get("likes"),
                     it.get("replies"),

@@ -24,7 +24,7 @@ from serp.runner import run_search
 from serp.tasks import MODES, build_tasks, load_queries, parse_date
 
 # Отчёты поиска, в порядке вывода --stats (сами отчёты — в db/stats.py).
-STATS_REPORTS = ["search_overview", "search_queries", "search_topics", "search_queue"]
+STATS_REPORTS = ["search_overview", "search_queries", "search_queue"]
 
 
 def build_parser(st) -> argparse.ArgumentParser:

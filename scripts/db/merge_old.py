@@ -28,11 +28,6 @@ SKIP_COLUMNS = {
     "is_target",
     "last_scraped_at",
     "processed_mode",
-    "discovered_via",
-    "discovered_from_profile_id",
-    "discovered_first_code",
-    "review_status",
-    "geo_version",
 }
 
 COLUMNS_SQL = """

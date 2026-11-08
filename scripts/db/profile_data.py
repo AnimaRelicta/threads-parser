@@ -8,27 +8,27 @@
 
 import asyncpg
 
-from core.geo import DEFAULT_TEXT_SOURCES, Resolved
+from core.geo import Resolved
 from core.instagram import DETECTOR_VERSION as IG_VERSION
 from core.logs import log
 from db.geo import PROFILE_COLS, save_geo
 
-# Блоки about и header пишутся, только если переданы (флаги $9 и $14); иначе поля остаются.
+# Блоки about и header пишутся, только если переданы (флаги $8 и $13); иначе поля остаются.
 PROFILE_SQL = f"""
 UPDATE profiles SET
-    url = coalesce($2, url), title = $3, og_title = $4, og_description = $5, og_image = $6,
-    followers_count = coalesce($7, followers_count),
-    bio = coalesce($8, bio),
-    about_name = CASE WHEN $9 THEN $10 ELSE about_name END,
-    about_joined = CASE WHEN $9 THEN $11 ELSE about_joined END,
-    about_location = CASE WHEN $9 THEN $12 ELSE about_location END,
-    about_raw = CASE WHEN $9 THEN $13::jsonb ELSE about_raw END,
-    about_fetched_at = CASE WHEN $9 THEN now() ELSE about_fetched_at END,
-    recent_views = CASE WHEN $14 THEN coalesce($15, recent_views) ELSE recent_views END,
-    topics = CASE WHEN $14 THEN $16::jsonb ELSE topics END,
-    links = CASE WHEN $14 THEN $17::jsonb ELSE links END,
-    header_fetched_at = CASE WHEN $14 THEN now() ELSE header_fetched_at END,
-    threads_count = coalesce($18, threads_count)
+    url = coalesce($2, url), og_title = $3, og_description = $4, og_image = $5,
+    followers_count = coalesce($6, followers_count),
+    bio = coalesce($7, bio),
+    about_name = CASE WHEN $8 THEN $9 ELSE about_name END,
+    about_joined = CASE WHEN $8 THEN $10 ELSE about_joined END,
+    about_location = CASE WHEN $8 THEN $11 ELSE about_location END,
+    about_raw = CASE WHEN $8 THEN $12::jsonb ELSE about_raw END,
+    about_fetched_at = CASE WHEN $8 THEN now() ELSE about_fetched_at END,
+    recent_views = CASE WHEN $13 THEN coalesce($14, recent_views) ELSE recent_views END,
+    topics = CASE WHEN $13 THEN $15::jsonb ELSE topics END,
+    links = CASE WHEN $13 THEN $16::jsonb ELSE links END,
+    header_fetched_at = CASE WHEN $13 THEN now() ELSE header_fetched_at END,
+    threads_count = coalesce($17, threads_count)
 WHERE id = $1
 RETURNING {PROFILE_COLS}
 """
@@ -55,13 +55,12 @@ async def save_profile_data(
     about=None,
     header=None,
     link=None,
-    text_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES,
 ) -> Resolved:
     """Пишет всё, что собрано при заходе в профиль; None-блок оставляет прежние значения.
 
-    meta: словарь страницы (url, title, og_*, followers, bio); about: core.about.About;
+    meta: словарь страницы (url, og_*, followers, bio); about: core.about.About;
     header: core.header.Header; link: core.instagram.IgLink. Данные и связь с Instagram
-    пишутся в одной транзакции. Геосигналы (location_mentions, about_country) — следом и
+    пишутся в одной транзакции. Геосигналы (location_mentions) — следом и
     отдельно: их сбой не откатывает данные профиля. Возвращает итог гео (пустой при сбое).
     """
     async with conn.transaction():
@@ -69,7 +68,6 @@ async def save_profile_data(
             PROFILE_SQL,
             profile_id,
             meta.get("url"),
-            meta.get("title"),
             meta.get("og_title"),
             meta.get("og_description"),
             meta.get("og_image"),
@@ -99,7 +97,7 @@ async def save_profile_data(
                 IG_VERSION,
             )
     try:
-        return await save_geo(conn, row, text_sources)
+        return await save_geo(conn, row)
     except Exception as e:  # гео не должно ронять обход профиля
         log(f"    [!] гео профиля не записано: {e!r}")
         return Resolved()

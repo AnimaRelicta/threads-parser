@@ -1,10 +1,12 @@
-"""Воркеры классификации профилей: выборка партии, запись категории и review_status, учёт в runs.
+"""Воркеры классификации профилей: выборка партии, запись категории, учёт в runs.
 
 Профиль берётся `SELECT ... FOR UPDATE SKIP LOCKED` внутри транзакции, которая живёт до записи
 результата: второй воркер (и второй процесс) его не возьмёт, а при падении транзакция
 откатывается и профиль остаётся в прежнем статусе. Пул нужен размером не меньше числа воркеров.
-Ошибки proxy API (таймаут, 429, 5xx, невалидный ответ) переводят профиль в review_failed и цикл
-идёт дальше; 401/403 останавливают запуск целиком.
+Ошибки proxy API (таймаут, 429, 5xx, невалидный ответ) пишут category_raw.error, профиль
+считается неудачным (source=failed) и цикл идёт дальше; 401/403 останавливают запуск целиком.
+Статуса проверки нет: «новый» = category_id пуст и ошибки нет, «проверенный» = категория есть
+и ошибки нет, «неудачный» = category_raw.error не пуст.
 """
 
 import asyncio
@@ -19,10 +21,16 @@ from config import Settings
 from db.pool import create_pool
 from db.runs import finish_run, start_run
 
+# source -> условие отбора (category_raw->>'error' пуст и у JSON null, и при отсутствии ключа)
+SOURCE_WHERE = {
+    "new": "category_id IS NULL AND (category_raw->>'error') IS NULL",
+    "failed": "(category_raw->>'error') IS NOT NULL",
+    "reviewed": "category_id IS NOT NULL AND (category_raw->>'error') IS NULL",  # --recheck
+}
 CLAIM_SQL = """
 SELECT id, username, og_title, og_description
 FROM profiles
-WHERE is_target AND review_status = $1 AND id <> ALL($2::bigint[])
+WHERE is_target AND {where} AND id <> ALL($1::bigint[])
 ORDER BY id
 LIMIT 1
 FOR UPDATE SKIP LOCKED
@@ -33,18 +41,15 @@ WHERE profile_id = $1 AND coalesce(text, '') <> ''
 ORDER BY date_utc DESC NULLS LAST, code
 LIMIT $2
 """
-SET_STATUS_SQL = "UPDATE profiles SET review_status = $2 WHERE id = $1"
 SAVE_SQL = """
 UPDATE profiles SET
     category_id = (SELECT id FROM categories WHERE code = $2),
-    category_raw = $3::jsonb, category_model = $4, category_prompt_version = $5,
-    review_status = $6
+    category_raw = $3::jsonb, category_model = $4, category_prompt_version = $5
 WHERE id = $1
 """
 FAIL_SQL = """
 UPDATE profiles SET
-    review_status = 'review_failed', category_raw = $2::jsonb,
-    category_model = $3, category_prompt_version = $4
+    category_raw = $2::jsonb, category_model = $3, category_prompt_version = $4
 WHERE id = $1
 """
 
@@ -74,8 +79,6 @@ class Context:
 
 async def _process(conn: asyncpg.Connection, ctx: Context, row: asyncpg.Record) -> None:
     pid, model = row["id"], ctx.client.model
-    if ctx.source != "pending_review":  # new / review_failed / reviewed -> pending_review
-        await conn.execute(SET_STATUS_SQL, pid, "pending_review")
     texts = [r["text"] for r in await conn.fetch(THREADS_SQL, pid, ctx.sample)]
     ctx.stats["processed"] += 1
     try:
@@ -95,16 +98,15 @@ async def _process(conn: asyncpg.Connection, ctx: Context, row: asyncpg.Record) 
     ctx.stats["prompt_tokens"] += res.raw["prompt_tokens"]
     ctx.stats["completion_tokens"] += res.raw["completion_tokens"]
     ctx.stats["latency_ms_sum"] += res.raw["latency_ms"]
-    status = "review_failed" if res.error else "reviewed"
     ctx.stats["failed" if res.error else "reviewed"] += 1
-    await conn.execute(SAVE_SQL, pid, res.category, res.raw, model, PROMPT_VERSION, status)
+    await conn.execute(SAVE_SQL, pid, res.category, res.raw, model, PROMPT_VERSION)
 
 
 async def _worker(pool: asyncpg.Pool, ctx: Context) -> None:
     while not ctx.stop.is_set() and ctx.remaining > 0:
         ctx.remaining -= 1
         async with pool.acquire() as conn, conn.transaction():
-            row = await conn.fetchrow(CLAIM_SQL, ctx.source, ctx.seen)
+            row = await conn.fetchrow(CLAIM_SQL.format(where=SOURCE_WHERE[ctx.source]), ctx.seen)
             if row is None:
                 return
             ctx.seen.append(row["id"])
@@ -129,7 +131,7 @@ async def _load_categories(conn: asyncpg.Connection) -> list[tuple[str, str, str
 
 
 async def run_classify(st: Settings, source: str, limit: int, workers: int, recheck: bool) -> dict:
-    """Классифицирует до limit профилей в статусе source; возвращает итоги запуска."""
+    """Классифицирует до limit профилей из выборки source (new | failed | reviewed); возвращает итоги запуска."""
     client = LLMClient(
         st.llm_proxy_url,
         st.llm_proxy_api_key,

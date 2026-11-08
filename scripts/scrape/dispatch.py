@@ -280,7 +280,7 @@ async def main_async(
     disp = Dispatcher(usernames)
     # Пул на весь запуск: воркеры берут соединения на время одной записи
     pool = await create_pool(st, max_size=max(5, len(accounts) * m + 2))
-    state.store = ProfileStore(pool, Path(args.output), st.text_geo_sources)
+    state.store = ProfileStore(pool, Path(args.output))
     try:
         async with async_playwright() as p:
             outcomes = await asyncio.gather(

@@ -6,7 +6,6 @@ import asyncpg
 
 from core.textfilter import FILTER_VERSION, classify, hashtags_mentions
 from core.timeutil import parse_dt
-from db.posts import upsert_topic
 
 
 async def ensure_job(
@@ -106,11 +105,11 @@ async def release_running_jobs(conn: asyncpg.Connection, run_id: int) -> int:
 # last_refreshed_at остаётся NULL: по нему профильный пайплайн отличает свои посты.
 SEARCH_POST_SQL = """
 INSERT INTO posts (
-    code, url, author_username, author_user_id, profile_id, text, topic_id, date_utc,
+    code, url, author_username, author_user_id, profile_id, text, date_utc,
     likes, reply_count, hashtags, mentions,
     filter_status, filter_matched, filter_matched_in, filter_version, first_seen_via)
 VALUES ($1, $2, $3, $4, (SELECT id FROM profiles WHERE lower(username) = lower($3)),
-        $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'search')
+        $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'search')
 ON CONFLICT (code) DO NOTHING
 RETURNING code
 """
@@ -145,16 +144,9 @@ async def save_hits(
     задачи дописывается в posts.found_keywords (и у новых постов, и у повторов).
     """
     new = dupes = 0
-    topic_ids: dict[str, int] = {}
     async with conn.transaction():
         for p in posts:
-            topic = p.get("topic")
-            topic_id = None
-            if topic:
-                if topic.lower() not in topic_ids:
-                    topic_ids[topic.lower()] = await upsert_topic(conn, topic)
-                topic_id = topic_ids[topic.lower()]
-            status, matched, matched_in = classify(p.get("text"), topic)
+            status, matched, matched_in = classify(p.get("text"), p.get("topic"))
             tags, mentions = hashtags_mentions(p.get("text"))
             inserted = await conn.fetchval(
                 SEARCH_POST_SQL,
@@ -163,7 +155,6 @@ async def save_hits(
                 p["username"],
                 p.get("user_id"),
                 p.get("text"),
-                topic_id,
                 parse_dt(p.get("date_utc")),
                 p.get("likes"),
                 p.get("reply_count"),
@@ -192,11 +183,12 @@ async def refilter(conn: asyncpg.Connection, everything: bool = False) -> dict:
     """Пересчитывает filter_* по текущим правилам.
 
     По умолчанию берутся посты со старой версией правил, everything=True пересчитывает все.
+    Тема поста из JSON Threads не хранится, поэтому пересчёт идёт только по тексту.
     """
     rows = await conn.fetch(
         """
-        SELECT p.code, p.text, p.filter_status, t.name AS topic
-        FROM posts p LEFT JOIN topics t ON t.id = p.topic_id
+        SELECT p.code, p.text, p.filter_status
+        FROM posts p
         WHERE $1::boolean OR p.filter_version <> $2
         """,
         everything,
@@ -204,7 +196,7 @@ async def refilter(conn: asyncpg.Connection, everything: bool = False) -> dict:
     )
     updates, changed = [], 0
     for r in rows:
-        status, matched, matched_in = classify(r["text"], r["topic"])
+        status, matched, matched_in = classify(r["text"], None)
         changed += status != r["filter_status"]
         updates.append((r["code"], status, matched, matched_in, FILTER_VERSION))
     if updates:

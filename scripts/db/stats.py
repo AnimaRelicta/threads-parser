@@ -117,25 +117,6 @@ register(
     )
 )
 
-# Поиск, отчёт 3: темы approved-постов.
-register(
-    Report(
-        name="search_topics",
-        title="Поиск: темы approved-постов",
-        sql="""
-            SELECT t.name                    AS topic,
-                   count(*)                   AS posts,
-                   round(avg(p.likes))::int    AS avg_likes
-            FROM posts p
-            JOIN topics t ON t.id = p.topic_id
-            WHERE p.first_seen_via = 'search' AND p.filter_status = 'approved'
-            GROUP BY t.name
-            ORDER BY posts DESC
-        """,
-        note="posts: approved-постов с этой темой; avg_likes: средние лайки",
-    )
-)
-
 # Поиск, отчёт 4: состояние очереди search_jobs.
 register(
     Report(
@@ -157,26 +138,6 @@ register(
 )
 
 
-# Профили, отчёт 1: очередь на проверку (review_status) по происхождению профиля.
-register(
-    Report(
-        name="profiles_review_queue",
-        title="Профили: очередь на проверку",
-        sql="""
-            SELECT p.discovered_via,
-                   p.review_status,
-                   count(*) AS profiles,
-                   count(*) FILTER (
-                       WHERE NOT EXISTS (SELECT 1 FROM posts t WHERE t.profile_id = p.id)
-                   ) AS without_threads
-            FROM profiles p
-            GROUP BY p.discovered_via, p.review_status
-            ORDER BY p.discovered_via, p.review_status
-        """,
-        note="without_threads: профилей, у которых ещё нет ни одной собранной ветки",
-    )
-)
-
 # Профили, отчёт 2: ветки быстрого режима (--threads-only) и сколько ещё без разбора.
 register(
     Report(
@@ -196,29 +157,6 @@ register(
     )
 )
 
-# Профили, отчёт 3: последние запуски discover (итоги лежат в runs.settings).
-register(
-    Report(
-        name="discover_runs",
-        title="Поиск новых профилей: последние запуски",
-        sql="""
-            SELECT id,
-                   to_char(started_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI') AS started,
-                   status,
-                   settings->>'since' AS since,
-                   settings->>'found' AS found,
-                   settings->>'added' AS added,
-                   left(coalesce(error, ''), 40) AS error
-            FROM runs
-            WHERE kind = 'discover'
-            ORDER BY id DESC
-            LIMIT 10
-        """,
-        note="found: кандидатов, added: заведено профилей; пробные запуски --dry-run не пишутся",
-    )
-)
-
-
 # Классификация, отчёт 1: распределение профилей по категориям.
 register(
     Report(
@@ -228,14 +166,14 @@ register(
             SELECT coalesce(c.name_ru, '(без категории)') AS category,
                    count(*) AS profiles,
                    round(avg((p.category_raw->>'confidence')::numeric), 2) AS avg_confidence,
-                   count(*) FILTER (WHERE p.review_status = 'review_failed') AS failed
+                   count(*) FILTER (WHERE (p.category_raw->>'error') IS NOT NULL) AS failed
             FROM profiles p
             LEFT JOIN categories c ON c.id = p.category_id
-            WHERE p.review_status <> 'new' OR p.category_id IS NOT NULL
+            WHERE p.category_id IS NOT NULL OR (p.category_raw->>'error') IS NOT NULL
             GROUP BY c.id, c.name_ru
             ORDER BY count(*) DESC
         """,
-        note="avg_confidence: средняя уверенность модели; failed: профилей в review_failed",
+        note="avg_confidence: средняя уверенность модели; failed: профилей с ошибкой классификации (category_raw.error)",
     )
 )
 

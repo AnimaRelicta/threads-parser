@@ -6,16 +6,13 @@ from dataclasses import dataclass, field
 import asyncpg
 
 from core.geo import (
-    DEFAULT_TEXT_SOURCES,
     DETECTOR_VERSION,
     OTHER,
     Resolved,
     Signal,
-    about_country,
     post_signals,
     profile_signals,
     resolve,
-    text_location,
 )
 from core.textfix import fix_text
 
@@ -26,7 +23,7 @@ INSERT INTO location_mentions
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING
 """  # без цели: любое нарушение location_mentions_dedup = «уже есть»
-PROFILE_COLS = "id, title, og_description, bio, about_name, about_location, links, topics"
+PROFILE_COLS = "id, bio, about_name, about_location, links, topics"
 
 
 def _json(value):
@@ -44,7 +41,8 @@ def _signals_of(row) -> list[Signal]:
 
 
 def _rows(entity_type: str, entity_id: str, profile_id: int | None, signals: list[Signal]):
-    # OTHER в location_mentions не пишется (CHECK KZ|UZ): он лежит в profiles.about_country
+    # OTHER (страна не КЗ/УЗ) в location_mentions не пишется (CHECK KZ|UZ); при чтении он
+    # восстанавливается из profiles.about_location (load_profile_geo)
     return [
         (entity_type, entity_id, profile_id, s.source, s.country, s.city, s.matched_text,
          DETECTOR_VERSION)
@@ -53,37 +51,8 @@ def _rows(entity_type: str, entity_id: str, profile_id: int | None, signals: lis
     ]  # fmt: skip
 
 
-async def _thread_places(conn: asyncpg.Connection, profile_id: int) -> list[tuple]:
-    """Самые частые места в ветках профиля (post_text): [(страна, город, веток)]."""
-    rows = await conn.fetch(
-        "SELECT country, city, count(DISTINCT entity_id) AS n FROM location_mentions "
-        "WHERE entity_type = 'post' AND profile_id = $1 GROUP BY 1, 2 ORDER BY n DESC, 1, 2",
-        profile_id,
-    )
-    return [(r["country"], r["city"], r["n"]) for r in rows]
-
-
-async def _text_location(conn, row, sources: tuple[str, ...]) -> tuple[str | None, str | None]:
-    """Колонки profiles.text_location / text_location_src по строке профиля и набору источников."""
-    places = await _thread_places(conn, row["id"]) if "threads" in sources else None
-    return text_location(
-        title=row["title"],
-        about_name=row["about_name"],
-        bio=row["bio"],
-        og_description=row["og_description"],
-        thread_places=places,
-        sources=sources,
-    )
-
-
-async def _write_profile(
-    conn: asyncpg.Connection,
-    row,
-    replace: bool,
-    text_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES,
-) -> int:
+async def _write_profile(conn: asyncpg.Connection, row, replace: bool) -> int:
     signals = _signals_of(row)
-    loc, loc_src = await _text_location(conn, row, text_sources)
     pid = row["id"]
     async with conn.transaction():
         if replace:
@@ -94,26 +63,15 @@ async def _write_profile(
         rows = _rows("profile", str(pid), pid, signals)
         if rows:
             await conn.executemany(INSERT_SQL, rows)
-        await conn.execute(
-            "UPDATE profiles SET about_country = $2, geo_version = $3, "
-            "text_location = $4, text_location_src = $5 WHERE id = $1",
-            pid,
-            about_country(signals),
-            DETECTOR_VERSION,
-            loc,
-            loc_src,
-        )
     return len(rows)
 
 
-async def save_geo(
-    conn: asyncpg.Connection, row, text_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES
-) -> Resolved:
+async def save_geo(conn: asyncpg.Connection, row) -> Resolved:
     """Геосигналы профиля по строке с колонками PROFILE_COLS (bio, about, шапка).
 
     Без запросов к Threads и без повторного чтения профиля: строку отдаёт UPDATE ... RETURNING
     в `db/profile_data.py`."""
-    await _write_profile(conn, row, replace=False, text_sources=text_sources)
+    await _write_profile(conn, row, replace=False)
     return resolve(_signals_of(row))
 
 
@@ -124,7 +82,6 @@ async def save_post_mentions(
     rows = _rows("post", code, profile_id, post_signals(text))
     if rows:
         await conn.executemany(INSERT_SQL, rows)
-    await conn.execute("UPDATE posts SET geo_version = $2 WHERE code = $1", code, DETECTOR_VERSION)
     return len(rows)
 
 
@@ -136,27 +93,21 @@ class RescanResult:
     errors: list[str] = field(default_factory=list)
 
 
-async def rescan(
-    conn: asyncpg.Connection,
-    force: bool,
-    log=print,
-    text_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES,
-) -> RescanResult:
+async def rescan(conn: asyncpg.Connection, log=print) -> RescanResult:
     """Пересчёт по накопленным данным. Строки сущности заменяются целиком (уходят и ложные
-    срабатывания старой версии справочника). Без force: geo_version пуст или меньше текущей."""
+    срабатывания старой версии справочника). Считаются все профили и все посты с текстом."""
     res = RescanResult()
     last = 0
     while True:
         rows = await conn.fetch(
-            f"SELECT {PROFILE_COLS} FROM profiles WHERE id > $1 "
-            "AND ($2 OR geo_version IS NULL OR geo_version < $3) ORDER BY id LIMIT $4",
-            last, force, DETECTOR_VERSION, BATCH,
+            f"SELECT {PROFILE_COLS} FROM profiles WHERE id > $1 ORDER BY id LIMIT $2",
+            last, BATCH,
         )  # fmt: skip
         if not rows:
             break
         for r in rows:
             try:
-                res.mentions += await _write_profile(conn, r, replace=True, text_sources=text_sources)
+                res.mentions += await _write_profile(conn, r, replace=True)
                 res.profiles += 1
             except Exception as e:  # один плохой профиль не останавливает пересчёт
                 res.errors.append(f"profile {r['id']}: {e!r}")
@@ -167,8 +118,8 @@ async def rescan(
         rows = await conn.fetch(
             "SELECT code, profile_id, text FROM posts WHERE code > $1 "
             "AND profile_id IS NOT NULL AND text IS NOT NULL AND text <> '' "
-            "AND ($2 OR geo_version IS NULL OR geo_version < $3) ORDER BY code LIMIT $4",
-            last_code, force, DETECTOR_VERSION, BATCH,
+            "ORDER BY code LIMIT $2",
+            last_code, BATCH,
         )  # fmt: skip
         if not rows:
             break
@@ -185,9 +136,6 @@ async def rescan(
             )
             if new_rows:
                 await conn.executemany(INSERT_SQL, new_rows)
-            await conn.execute(
-                "UPDATE posts SET geo_version = $2 WHERE code = ANY($1)", codes, DETECTOR_VERSION
-            )
         res.posts += len(rows)
         res.mentions += len(new_rows)
         last_code = codes[-1]
@@ -195,47 +143,16 @@ async def rescan(
     return res
 
 
-async def fill_text_location(
-    conn: asyncpg.Connection,
-    sources: tuple[str, ...],
-    only_empty: bool = False,
-    log=print,
-) -> tuple[int, int]:
-    """Пересчитывает только profiles.text_location по выбранным источникам (location_mentions и
-    about_country не трогает). Возвращает (профилей просмотрено, с найденной локацией)."""
-    seen = found = 0
-    last = 0
-    while True:
-        rows = await conn.fetch(
-            f"SELECT {PROFILE_COLS} FROM profiles WHERE id > $1 "
-            "AND (NOT $2 OR text_location IS NULL) ORDER BY id LIMIT $3",
-            last, only_empty, BATCH,
-        )  # fmt: skip
-        if not rows:
-            return seen, found
-        upd = []
-        for r in rows:
-            loc, src = await _text_location(conn, r, sources)
-            upd.append((r["id"], loc, src))
-            found += loc is not None
-        await conn.executemany(
-            "UPDATE profiles SET text_location = $2, text_location_src = $3 WHERE id = $1", upd
-        )
-        seen += len(rows)
-        last = rows[-1]["id"]
-        log(f"    профилей: {seen}, с локацией из текста: {found}")
-
-
-FIX_COLS = ("bio", "title", "og_title", "og_description", "about_name", "about_location")
+FIX_COLS = ("bio", "og_title", "og_description", "about_name", "about_location")
 
 
 async def fix_encoding(
-    conn: asyncpg.Connection, apply: bool, text_sources: tuple[str, ...], log=print
+    conn: asyncpg.Connection, apply: bool, log=print
 ) -> tuple[int, dict[str, int]]:
     """Находит текстовые поля профилей с неразобранными `\\uXXXX` и записывает нормальный текст.
 
-    apply=False: только считает. Для исправленных профилей заново считаются геосигналы и
-    text_location (в био мог быть город). Возвращает (профилей, {колонка: сколько исправлено})."""
+    apply=False: только считает. Для исправленных профилей заново считаются геосигналы
+    (в био мог быть город). Возвращает (профилей, {колонка: сколько исправлено})."""
     cond = " OR ".join(f"{c} ~ '\\\\u[0-9a-fA-F]{{4}}'" for c in FIX_COLS)
     cols = ", ".join(FIX_COLS)
     rows = await conn.fetch(f"SELECT id, {cols} FROM profiles WHERE {cond} ORDER BY id")
@@ -260,7 +177,7 @@ async def fix_encoding(
                 f"SELECT {PROFILE_COLS} FROM profiles WHERE id = ANY($1)", fixed_ids[i : i + BATCH]
             )
             for r in chunk:
-                await _write_profile(conn, r, replace=True, text_sources=text_sources)
+                await _write_profile(conn, r, replace=True)
         log(f"    геосигналы пересчитаны: {len(fixed_ids)}")
     return len(fixed_ids), per_col
 
@@ -280,7 +197,7 @@ class ProfileGeo:
 async def load_profile_geo(conn: asyncpg.Connection) -> list[ProfileGeo]:
     """Итог по каждому профилю: надёжные источники -> resolve(); посты отдельно (слабый сигнал)."""
     profiles = await conn.fetch(
-        "SELECT id, username, about_location, about_country FROM profiles ORDER BY username"
+        "SELECT id, username, about_location FROM profiles ORDER BY username"
     )
     by_profile: dict[int, list[Signal]] = {}
     for r in await conn.fetch(
@@ -299,10 +216,10 @@ async def load_profile_geo(conn: asyncpg.Connection) -> list[ProfileGeo]:
     out = []
     for p in profiles:
         signals = by_profile.get(p["id"], [])
-        if p["about_country"] == OTHER or (
-            p["about_country"] and not any(s.source == "about_location" for s in signals)
-        ):
-            signals = [*signals, Signal("about_location", p["about_country"], None, "")]
+        place = (p["about_location"] or "").strip()
+        if place and not any(s.source == "about_location" for s in signals):
+            # место указано, но не КЗ/УЗ («Беларусь»): в location_mentions его нет
+            signals = [*signals, Signal("about_location", OTHER, None, place)]
         out.append(
             ProfileGeo(
                 p["id"],

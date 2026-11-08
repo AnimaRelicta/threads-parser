@@ -5,8 +5,8 @@
 Без --recheck профили, у которых category_id уже есть, пропускаются.
 
 Запись: category_id, category_raw (все вероятности, пороги, причина «Прочее», токены),
-category_model (версия, которая ответила), category_prompt_version, review_status = reviewed
-(через pending_review, как требует триггер переходов). Ошибка запроса = review_failed.
+category_model (версия, которая ответила), category_prompt_version. Ошибка запроса пишет
+category_raw.error (категория остаётся прежней).
 """
 
 import asyncio
@@ -43,21 +43,14 @@ ORDER BY id
 SAVE_SQL = """
 UPDATE profiles SET
     category_id = (SELECT id FROM categories WHERE code = $2),
-    category_raw = $3::jsonb, category_model = $4, category_prompt_version = $5,
-    review_status = 'reviewed'
+    category_raw = $3::jsonb, category_model = $4, category_prompt_version = $5
 WHERE id = $1
 """
 FAIL_SQL = """
 UPDATE profiles SET
-    review_status = 'review_failed', category_raw = $2::jsonb,
-    category_model = $3, category_prompt_version = $4
+    category_raw = $2::jsonb, category_model = $3, category_prompt_version = $4
 WHERE id = $1
 """
-# триггер допускает new|reviewed|review_failed -> pending_review -> reviewed|review_failed
-TO_PENDING_SQL = (
-    "UPDATE profiles SET review_status = 'pending_review' "
-    "WHERE id = $1 AND review_status <> 'pending_review'"
-)
 
 
 @dataclass
@@ -206,13 +199,11 @@ async def _worker(pool: asyncpg.Pool, ctx: Context) -> None:
             st["requests"] += e.requests
             raw = {"engine": "jev", "error": str(e)[:300], "prompt_version": PROMPT_VERSION}
             async with pool.acquire() as conn, conn.transaction():
-                await conn.execute(TO_PENDING_SQL, cand.id)
                 await conn.execute(FAIL_SQL, cand.id, raw, model, PROMPT_VERSION)
             continue
         d = decide(resp.answers, ctx.codes, ctx.gate)
         raw = _raw(d, resp, ctx.gate, len(cand.state))
         async with pool.acquire() as conn, conn.transaction():
-            await conn.execute(TO_PENDING_SQL, cand.id)
             await conn.execute(SAVE_SQL, cand.id, d.category, raw, resp.model, PROMPT_VERSION)
         st["processed"] += 1
         st["requests"] += resp.requests

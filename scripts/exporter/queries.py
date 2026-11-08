@@ -51,13 +51,12 @@ def _est(days: int) -> str:
 
 _SQL = {
     "profiles": (
-        "Лист для выгрузки: id, ник, ссылка, заголовок, подписчики, ветки, просмотры, био, "
-        "дата создания, локации, темы, топики, оценка веток за 7/30/90 дней; --since: когда найден",
+        "Лист для выгрузки: id, ник, ссылка, подписчики, ветки, просмотры, био, "
+        "дата создания, локация, темы, оценка веток за 7/30/90 дней; --since: когда найден",
         f"""
 SELECT p.id,
        p.username AS "название",
        {_URL} AS "ссылка",
-       nullif(trim(regexp_replace(p.title, '\\s*\\(@[A-Za-z0-9_.]+\\)\\s*•.*$', '')), '') AS "заголовок",
        p.followers_count AS "подписчиков",
        p.threads_count AS "веток",
        p.recent_views AS "просмотров",
@@ -77,16 +76,10 @@ SELECT p.id,
          WHERE l->>'kind' = 'other') AS "другие ссылки",
        p.about_joined AS "дата создания",
        p.about_location AS "локация из био",
-       p.text_location AS "локация из текста",
        (SELECT string_agg(e->>'text', ', ')
           FROM jsonb_array_elements(
                    CASE WHEN jsonb_typeof(p.topics) = 'array' THEN p.topics ELSE '[]'::jsonb END
                ) e) AS "темы",
-       (SELECT string_agg(x.name || ' (' || x.n || ')', ', ' ORDER BY x.n DESC, x.name)
-          FROM (SELECT tp.name, count(*) AS n
-                  FROM posts t JOIN topics tp ON tp.id = t.topic_id
-                 WHERE t.profile_id = p.id
-                 GROUP BY tp.name ORDER BY n DESC, tp.name LIMIT 5) x) AS "топики",
        {_est(7)} AS "веток за 7д (оценка)",
        {_est(30)} AS "веток за 30д (оценка)",
        {_est(90)} AS "веток за 90д (оценка)"
@@ -98,10 +91,10 @@ LIMIT :limit
 """,
     ),
     "profiles-full": (
-        "Все профили, широко: подписчики, категория, страна; --since: когда найден",
+        "Все профили, широко: подписчики, категория, локация; --since: когда найден",
         f"""
-SELECT p.username, p.followers_count, c.name_ru AS category, p.about_country AS country,
-       p.about_location, p.review_status, p.discovered_via,
+SELECT p.username, p.followers_count, c.name_ru AS category, p.is_target,
+       p.about_location, p.processed_mode,
        p.first_seen_at, p.last_scraped_at, p.bio, {_URL} AS url
 FROM profiles p
 LEFT JOIN categories c ON c.id = p.category_id
@@ -114,9 +107,8 @@ LIMIT :limit
         "Ветки (posts): текст, дата, ответы, лайки; --since: дата ветки",
         """
 SELECT t.date_utc, t.author_username, t.reply_count, t.likes, t.reposts, t.quotes,
-       t.filter_status, tp.name AS topic, t.text, t.url, t.code
+       t.filter_status, t.text, t.url, t.code
 FROM posts t
-LEFT JOIN topics tp ON tp.id = t.topic_id
 WHERE :since::timestamptz IS NULL OR t.date_utc >= :since
 ORDER BY t.date_utc DESC NULLS LAST
 LIMIT :limit

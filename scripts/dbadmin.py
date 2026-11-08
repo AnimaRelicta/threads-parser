@@ -52,7 +52,7 @@ def cmd_status(st) -> None:
 
 def cmd_fix_encoding(st, dry_run: bool) -> None:
     """Текст профилей с неразобранными \\uXXXX (био, имя, заголовок) -> нормальный текст."""
-    n, per_col = run_sync(st, lambda conn: fix_encoding(conn, not dry_run, st.text_geo_sources))
+    n, per_col = run_sync(st, lambda conn: fix_encoding(conn, not dry_run))
     cols = ", ".join(f"{c}: {k}" for c, k in per_col.items() if k)
     verb = "нужно исправить" if dry_run else "исправлено"
     print(f"[+] Профилей, где {verb}: {n}" + (f" ({cols})" if cols else ""))

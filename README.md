@@ -13,10 +13,9 @@ threads-parser/
 ├── scripts/
 │   ├── .env.example   # шаблон настроек (копия -> scripts/.env, в git не попадает)
 │   ├── config.py      # константы Threads, чтение scripts/.env, Settings
-│   ├── cli.py         # единая точка входа: parse | search | discover | accounts
+│   ├── cli.py         # единая точка входа: parse | search | classify | accounts
 │   ├── run.py         # CLI: парсинг профилей
 │   ├── search.py      # CLI: поиск по выдаче Threads, --refilter и --stats (БД, без браузера)
-│   ├── discover.py    # CLI: новые профили по авторам постов и веток (БД, без браузера)
 │   ├── geo.py         # CLI: страна/город профилей КЗ/УЗ (rescan/stats/list, БД, без браузера)
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
 │   ├── dbadmin.py     # CLI: Postgres (migrate/status/import-accounts/import-profiles/import-search/merge-old-profiles)
@@ -36,7 +35,6 @@ threads-parser/
 ```bash
 uv run scripts/cli.py parse olx_vetka_astana --limit 5 --comments   # = run.py
 uv run scripts/cli.py search "олх ветка астана" --since 7d          # = search.py
-uv run scripts/cli.py discover --since 7d --dry-run                 # = discover.py
 uv run scripts/cli.py geo stats                                     # = geo.py
 uv run scripts/cli.py accounts check --headless                     # = accounts.py
 uv run scripts/cli.py db migrate                                    # = dbadmin.py
@@ -82,24 +80,21 @@ uv run scripts/cli.py parse --help                                  # справ
 | `profile_data.py` | Данные профиля одним вызовом: страница, «Об этом профиле», шапка, `instagram_links` (одна транзакция), затем геосигналы `location_mentions` по строке из `RETURNING`. | `save_profile_data` |
 | `profiles.py` | Хранилище профильного пайплайна поверх пула: общий для воркеров запуска. | `ProfileStore`, `ProfileState` |
 | `search.py` | Поиск: очередь `search_jobs`, найденные посты, связи `post_hits`, пересчёт фильтра. | `ensure_job`, `start_job`, `finish_job`, `save_hits`, `add_keyword`, `refilter` |
-| `geo.py` | Локации (`location_mentions`, `profiles.about_country`): запись при сборе профиля и поста, пересчёт `rescan`, выборки для CLI. | `save_geo`, `save_post_mentions`, `rescan`, `load_profile_geo` |
+| `geo.py` | Локации (`location_mentions`): запись при сборе профиля и поста, пересчёт `rescan`, выборки для CLI. | `save_geo`, `save_post_mentions`, `rescan`, `load_profile_geo` |
 | `legacy.py` | Разовый перенос старых файлов (posts.json профилей, posts.jsonl и jobs.json поиска). | `normalize_post`, `import_profiles`, `import_search` |
 | `runs.py` | Запуски: `runs`, `run_accounts`, `profile_runs`. | `start_run`, `finalize_run`, `finish_run`, `save_profile_runs`, `ensure_profile` |
-| `discovery.py` | Новые профили по авторам: кандидаты из `comments.author` и `posts.author_username`, вставка в `profiles`. | `find_candidates`, `insert_candidates`, `discover_authors` |
 | `stats.py` | Реестр отчётов (SQL + заголовок) и вывод таблицей. | `Report`, `REPORTS`, `run_report`, `format_table` |
+| `migrations/019_drop_unused_columns.sql` | Удалены: таблица `topics`, `posts.topic_id`, `posts.geo_version`; в `profiles` бан/спам (`is_banned`, `ban_reason`, `banned_at`, `spam_*`), discover (`discovered_*`, `mentions_count`, `review_status` с триггером), гео-кэш (`about_country`, `geo_version`, `text_location`, `text_location_src`), `user_id`, `title`. Необратимо: перед запуском сделайте дамп. | |
 | `migrations/001_init.sql` | Начальная схема (аккаунты, запуски, профили, посты, комментарии, медиа, поиск, темы). | |
-| `migrations/005_categories.sql` | Справочник `categories` (7 категорий), колонки категории в `profiles`, триггер допустимых переходов `review_status`. | |
+| `migrations/005_categories.sql` | Справочник `categories` (7 категорий), колонки категории в `profiles`, (триггер переходов `review_status` убран в 019). | |
 | `migrations/013_cleanup.sql` | Уборка схемы: из `search_jobs` убраны `origin`, `parent_job_id`, `topic_id`, `depth` и из `topics` `is_active` (задел под несуществующий `--follow-topics`), удалён индекс-дубль `location_mentions_entity`. | |
-| `migrations/012_spam_class.sql` | Колонки `profiles.spam_class` (1/2/3), `spam_class_info`, `spam_class_at`. | |
-| `migrations/006_spam_ban.sql` | Колонки `profiles.is_banned`, `ban_reason`, `banned_at`, `spam_score`, `spam_signals`, `spam_checked_at`, `spam_whitelist`. | |
 | `migrations/004_audit_runs.sql` | Удалена неиспользуемая `custom_topics`; `runs.kind` = `profiles`/`search`/`discover`/`classify`; комментарий к `skipped_posts`. | |
-| `migrations/003_discovery.sql` | Колонки `profiles`: `discovered_via`, `discovered_from_profile_id`, `review_status`, `mentions_count`, `discovered_first_code`. | |
 
 Подготовка: `DATABASE_URL` в `scripts/.env`, затем `uv run scripts/cli.py db migrate`;
 состояние: `uv run scripts/cli.py db status`. Перенос идёт поэтапно: в БД уже живут
 реестр аккаунтов, записи запусков (`runs`, `run_accounts`, `profile_runs`) и весь профильный
 пайплайн (`profiles`, `posts`, `comments`, `media`, `profile_anchors`, `skipped_posts`) и поиск
-(`search_jobs`, `posts`, `post_hits`, `topics`). Файлы в `data/output/<ник>/` теперь только
+(`search_jobs`, `posts`, `post_hits`). Файлы в `data/output/<ник>/` теперь только
 `media/`, `captions.txt` и итоговый `summary.json`.
 
 Поиск: готовое окно (задача `done`) не перезапускается без `--force`; пост, найденный несколькими
@@ -186,7 +181,7 @@ approved-постов и состояние очереди `search_jobs`. CSV н
 | `client.py` | HTTP-клиент к proxy API модели (формат OpenAI chat/completions), стандартная библиотека, повторы при 429/5xx/таймауте. | `LLMClient`, `LLMError`, `LLMAuthError` |
 | `prompts.py` | Системный промпт с категориями из `categories`, пользовательский с профилем и ветками. | `PROMPT_VERSION`, `build_system_prompt`, `build_user_prompt` |
 | `classifier.py` | Профиль и ветки -> категория; плохой JSON и неизвестный код дают `other` с пометкой. | `classify_profile`, `parse_answer`, `ClassifyResult` |
-| `runner.py` | Воркеры: выборка `FOR UPDATE SKIP LOCKED`, запись категории и `review_status`, учёт в `runs`. | `run_classify` |
+| `runner.py` | Воркеры: выборка `FOR UPDATE SKIP LOCKED`, запись категории, учёт в `runs`. | `run_classify` |
 | `cli.py` | Подкоманда `classify`. | `main` |
 
 ### Единый стандарт кода
@@ -388,11 +383,10 @@ uv run scripts/cli.py jev-posts --all [--recheck] # полный прогон
 ### Категории профилей: `classify`
 
 ```bash
-uv run scripts/cli.py classify --limit 50                       # профили в pending_review
+uv run scripts/cli.py classify --limit 50                       # профили без категории
 uv run scripts/cli.py classify --limit 200 --workers 4
-uv run scripts/cli.py classify --limit 50 --source review_failed   # повтор неудачных
-uv run scripts/cli.py classify --limit 50 --source new          # профили из списка (new)
-uv run scripts/cli.py classify --limit 50 --recheck             # переклассифицировать reviewed
+uv run scripts/cli.py classify --limit 50 --source failed          # повтор неудачных (category_raw.error)
+uv run scripts/cli.py classify --limit 50 --recheck             # переклассифицировать профили с категорией
 uv run scripts/cli.py classify --stats                          # категории, время, расход запросов
 ```
 
@@ -401,11 +395,11 @@ uv run scripts/cli.py classify --stats                          # категор
 `og_description` и последние `LLM_SAMPLE_THREADS` веток профиля (посты под ветками не берутся) и
 отвечает JSON `{"category", "confidence", "reason"}`. Результат: `profiles.category_id`,
 `category_raw` (ответ, время, токены), `category_model`, `category_prompt_version`;
-`review_status` становится `reviewed` или `review_failed`. Переходы статуса проверяет триггер БД:
-`new -> pending_review -> reviewed | review_failed`, `reviewed -> pending_review` (`--recheck`),
-`review_failed -> pending_review` (повтор). Профиль берётся `FOR UPDATE SKIP LOCKED` и остаётся
+Статуса проверки нет, выборка идёт по самим данным: `--source new` (по умолчанию) = `category_id`
+пуст и `category_raw.error` пуст; `--source failed` = `category_raw.error` не пуст (ответ не
+разобран или запрос не прошёл); `--recheck` = категория уже есть. Профиль берётся `FOR UPDATE SKIP LOCKED` и остаётся
 заблокированным до записи результата, поэтому воркеры и процессы не берут один профиль дважды.
-Ошибки proxy API (таймаут, 429, 5xx, невалидный ответ) дают `review_failed` и не останавливают
+Ошибки proxy API (таймаут, 429, 5xx, невалидный ответ) пишут `category_raw.error` и не останавливают
 запуск; 401/403 останавливают его целиком, профиль остаётся как был. Запуск пишется в `runs`
 (`kind='classify'`, итоги в `settings`).
 
@@ -422,7 +416,7 @@ uv run scripts/cli.py classify --stats                          # категор
 
 Базовые запросы (`--list`): `profiles`, `profiles-full`, `threads`, `top-authors`, `instagram`. Смысл `--since` у каждого указан в `--list`.
 
-Лист `profiles` — только важное, в таком порядке: `id`, `название` (ник), `ссылка`, `заголовок` (название профиля без «(@ник) • Threads…»), `подписчиков`, `веток` (`threads_count`, из og:description), `просмотров` (недавние просмотры из шапки), `bio`, `instagram`, `whatsapp`, `telegram`, `другие ссылки` (из `profiles.links`, ссылки в шапке; instagram: ещё подтверждённая связка из `instagram_links`), `дата создания` (`about_joined`), `локация из био` (`about_location`, «Об этом профиле»), `локация из текста` (`text_location`), `темы` (чипы шапки профиля), `топики` (до 5 тем его веток из справочника `topics` с числом веток), `веток за 7д/30д/90д (оценка)` (в конце листа: `веток` ÷ дней с даты создания × 7/30/90, не больше `веток`; день регистрации в источнике неизвестен, берётся 1-е число месяца; без даты создания — пусто). Прежний широкий лист (категория, класс, бан, статус разбора) — `profiles-full`.
+Лист `profiles` — только важное, в таком порядке: `id`, `название` (ник), `ссылка`, `подписчиков`, `веток` (`threads_count`, из og:description), `просмотров` (недавние просмотры из шапки), `bio`, `instagram`, `whatsapp`, `telegram`, `другие ссылки` (из `profiles.links`, ссылки в шапке; instagram: ещё подтверждённая связка из `instagram_links`), `дата создания` (`about_joined`), `локация из био` (`about_location`, «Об этом профиле»), `темы` (чипы шапки профиля), `веток за 7д/30д/90д (оценка)` (в конце листа: `веток` ÷ дней с даты создания × 7/30/90, не больше `веток`; день регистрации в источнике неизвестен, берётся 1-е число месяца; без даты создания — пусто). Прежний широкий лист (категория, `is_target`, `processed_mode`) — `profiles-full`.
 
 **Свои запросы** лежат в `data/export_queries.sql` (путь: `EXPORT_QUERIES_FILE` или `--queries-file`):
 
@@ -440,7 +434,7 @@ uv run scripts/cli.py export profiles                            # data/export/p
 uv run scripts/cli.py export profiles threads --since 7d         # два листа в одном файле
 uv run scripts/cli.py export top-authors --since 1m --limit 500 --out data/export/top.xlsx
 uv run scripts/cli.py export my-query --out D:\work\reports\   # в папку, имя файла автоматически
-uv run scripts/cli.py export --sql "SELECT username FROM profiles WHERE is_banned" --sheet bans
+uv run scripts/cli.py export --sql "SELECT username FROM profiles WHERE NOT is_target" --sheet off
 ```
 
 Нужен пакет `openpyxl` (в `pyproject.toml`; `uv run` подтянет его сам).
@@ -481,27 +475,8 @@ uv run scripts/run.py --source all --fill-threads --since 7d --limit 50
 
 `--source` берёт профили из БД и добавляет их к профилю из командной строки и к `--file`:
 `all` (все с `is_target`), `new` (профили, у которых ещё нет ни одной ветки), `ник1,ник2`.
-`search` (профили с `discovered_via='search'`) и `authors` (`discovered_via='author'`) работают
-после миграции `003_discovery` и `discover.py`. Функция выбора — `list_targets()` в
-`db/profiles.py`. Внимание: профили, заведённые `discover.py`, получают `is_target = true`,
-поэтому входят и в `--source all`; отобрать только их можно через `--source authors` / `search`.
-
-### Новые профили по авторам: `discover.py`
-
-```bash
-uv run scripts/discover.py --since 7d --dry-run            # показать кандидатов, ничего не писать
-uv run scripts/discover.py --since 7d                      # завести профили
-uv run scripts/discover.py --since 1m --min-mentions 3     # только авторов, встретившихся 3+ раза
-uv run scripts/run.py --source authors --threads-only --since 7d   # собрать ветки новых профилей
-```
-
-Работает только с БД. Кандидаты: авторы постов под ветками (`comments.author`) -> `discovered_via='author'`
-и авторы веток из поиска (`posts.author_username` при `profile_id IS NULL`) -> `'search'`; если ник
-встретился в обоих местах, берётся `'search'`. Исключаются ники, уже имеющиеся в `profiles`
-(по `lower(username)`), и автор под собственной веткой. Профили создаются с `is_target = true`,
-`review_status = 'pending_review'`, `discovered_from_profile_id` (профиль, под чьей веткой найден
-автор; для `'search'` пусто), `mentions_count` и `discovered_first_code`. Повторный запуск
-ничего не добавляет. Запуск пишется в `runs` (`kind='discover'`, итоги `found`/`added` в `settings`; `--dry-run` не пишется). `uv run scripts/discover.py --stats` показывает очередь профилей на проверку, число веток быстрого режима без разбора и последние запуски. `skipped_posts` остаётся: по ней профильный проход пропускает уже виденные старые и видео-ветки. `--since` без значения (и без `SINCE` в `.env`) берёт весь накопленный период.
+Из БД берутся только профили с `is_target = true` (его ставит `sqlrun.py select-targets`).
+Функция выбора — `list_targets()` в `db/profiles.py`.
 
 ### Настройки по умолчанию в `.env`
 
@@ -548,25 +523,11 @@ uv run scripts/run.py --source authors --threads-only --since 7d   # собра�
 
 Сигналы по убыванию надёжности: `about_location` («Об этом профиле»; не КЗ/УЗ сохраняется как `OTHER`) > телефон в WhatsApp-ссылке (998 → UZ; 7 + 6xx/7xx → KZ, российские и неоднозначные номера не считаются) > био > имя из about > темы шапки. Города в текстах веток (`post_text`) слабый сигнал: хранятся отдельно и в итог не входят.
 
-В БД лежат только факты (`profiles.about_country`, `location_mentions`, миграция 011); итог считается при чтении (`core/geo.py::resolve`), поэтому правила меняются без миграций. Если надёжные источники называют разные страны, итог берётся из самого надёжного, строка помечается КОНФЛИКТ и показывает все источники. Сигналы профиля пишутся в `open_profile` без запросов к Threads, упоминания постов, при сохранении поста; ошибки детектора только логируются.
-
-### Локация из текста: `profiles.text_location`
-
-Отдельная колонка (миграция 016), на итоговую страну не влияет: подсказка для профилей, у которых «Об этом профиле» собрать не удалось. Города и страны КЗ и УЗ ищутся по тому же справочнику `core/geo.py` в тексте профиля: `KZ Астана, UZ Ташкент`; какие источники сработали, лежит в `text_location_src` (`title,bio`). Источники задаёт `TEXT_GEO_SOURCES` в `scripts/.env` (или `--sources`):
-
-| Источник | Что читается | По умолчанию |
-|---|---|---|
-| `title` | название профиля (`profiles.title` без «(@ник) • Threads…») | да |
-| `name` | имя из «Об этом профиле» (`about_name`) | да |
-| `bio` | био | да |
-| `description` | описание профиля (`og_description` без счётчиков подписчиков и веток) | да |
-| `threads` | самые частые места в текстах его веток (`location_mentions`, до 3) | нет, слабый сигнал |
-
-Колонка заполняется при заходе в профиль. По уже собранным данным: `geo textloc` (`--with-threads` добавляет ветки к источникам, `--only-empty` берёт только пустые). Места из веток считаются по `location_mentions`, поэтому после новых веток сначала `geo rescan`.
+В БД лежат только факты (`location_mentions`, миграция 008/011; страна «не КЗ/УЗ» восстанавливается из `profiles.about_location`); итог считается при чтении (`core/geo.py::resolve`), поэтому правила меняются без миграций. Если надёжные источники называют разные страны, итог берётся из самого надёжного, строка помечается КОНФЛИКТ и показывает все источники. Сигналы профиля пишутся в `open_profile` без запросов к Threads, упоминания постов, при сохранении поста; ошибки детектора только логируются.
 
 ### Починка кодировки био: `dbadmin.py fix-encoding`
 
-Био, записанное до этой правки, могло лежать в БД как `\u041f\u043e\u043a\u0443...` (в JSON страницы кириллица и эмодзи экранированы, а перекодировка этого не разбирала). Источник исправлен (`core/biography.py`, `core/textfix.py`). Старые записи чинятся одной командой: она разбирает `bio`, `title`, `og_title`, `og_description`, `about_name`, `about_location`, после чего пересчитывает геосигналы и `text_location` этих профилей. Повторный запуск безопасен.
+Био, записанное до этой правки, могло лежать в БД как `\u041f\u043e\u043a\u0443...` (в JSON страницы кириллица и эмодзи экранированы, а перекодировка этого не разбирала). Источник исправлен (`core/biography.py`, `core/textfix.py`). Старые записи чинятся одной командой: она разбирает `bio`, `og_title`, `og_description`, `about_name`, `about_location`, после чего пересчитывает геосигналы этих профилей. Повторный запуск безопасен.
 
 ```bash
 uv run scripts/dbadmin.py fix-encoding --dry-run   # сколько записей затронуто
@@ -574,12 +535,11 @@ uv run scripts/dbadmin.py fix-encoding
 ```
 
 ```bash
-uv run scripts/cli.py geo rescan [--force]                  # пересчёт по данным в БД (после правки справочника: поднять DETECTOR_VERSION)
-uv run scripts/cli.py geo textloc [--with-threads] [--sources title,bio] [--only-empty]  # profiles.text_location
+uv run scripts/cli.py geo rescan                           # пересчёт всех профилей и постов по данным в БД (после правки справочника: поднять DETECTOR_VERSION)
 uv run scripts/cli.py geo stats                             # топ стран/городов по профилям и постам, без данных, источники
 uv run scripts/cli.py geo list --country KZ --city Алматы [--csv файл]
 uv run python tests/geo_check.py                            # проверка без сети и БД
-uv run python tests/textloc_check.py                        # кодировка био, число веток, text_location
+uv run python tests/profile_data_check.py                   # кодировка био, число веток, лист выгрузки
 ```
 
 ### Дополнение профилей из старой БД: `dbadmin.py merge-old-profiles`

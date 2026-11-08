@@ -4,8 +4,6 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.geo import DEFAULT_TEXT_SOURCES, parse_text_sources
-
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = Path(__file__).resolve().parent / ".env"
 
@@ -84,10 +82,6 @@ class Settings:
     jev_noul_gate: bool = True  # JEV_NOUL_GATE: вторая проверка «подходит ли хоть один класс 1-6»
     jev_noul_min: float = 0.5  # JEV_NOUL_MIN: Noul ниже = «Прочее»
 
-    # --- геолокация текстов --------------------------------------------------
-    # откуда брать profiles.text_location: title,name,bio,description,threads (TEXT_GEO_SOURCES)
-    text_geo_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES
-
     # Postgres и Proxy для поиска
     database_url: str | None = None  # DATABASE_URL (пароль только в scripts/.env, не в коде)
     proxy: str | None = None  # PROXY, например socks5://127.0.0.1:12334
@@ -126,13 +120,6 @@ def _int(v: str | None, default: int) -> int:
         return int(v) if v not in (None, "") else default
     except ValueError:
         return default
-
-
-def _text_sources(v: str | None) -> tuple[str, ...]:
-    try:
-        return parse_text_sources(v)
-    except ValueError as e:
-        raise SystemExit(f"TEXT_GEO_SOURCES в {ENV_FILE}: {e}") from e
 
 
 def _float(v: str | None, default: float) -> float:
@@ -212,7 +199,6 @@ def load_settings() -> Settings:
         jev_min_confidence=min(1.0, max(0.0, _float(get("JEV_MIN_CONFIDENCE"), 0.5))),
         jev_noul_gate=_bool(get("JEV_NOUL_GATE"), True),
         jev_noul_min=min(1.0, max(0.0, _float(get("JEV_NOUL_MIN"), 0.5))),
-        text_geo_sources=_text_sources(get("TEXT_GEO_SOURCES")),
         database_url=(get("DATABASE_URL") or "").strip() or None,
         proxy=(get("PROXY") or "").strip() or None,
     )

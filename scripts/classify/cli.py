@@ -1,12 +1,11 @@
-"""Точка входа: классификация профилей через LLM (категория профиля, review_status).
+"""Точка входа: классификация профилей через LLM (категория профиля).
 
 Работает через БД и proxy API модели, без браузера. Запускается подкомандой cli.py
 (файл не называется classify.py, чтобы не совпасть с именем пакета):
 
     uv run scripts/cli.py classify --limit 50
     uv run scripts/cli.py classify --limit 200 --workers 4
-    uv run scripts/cli.py classify --limit 50 --source review_failed   # повтор неудачных
-    uv run scripts/cli.py classify --limit 50 --source new             # профили из списка
+    uv run scripts/cli.py classify --limit 50 --source failed          # повтор неудачных
     uv run scripts/cli.py classify --limit 50 --recheck                # переклассифицировать
 """
 
@@ -17,7 +16,7 @@ from classify.runner import run_classify
 from config import ENV_FILE, load_settings
 from db.stats import print_reports
 
-SOURCES = ("pending_review", "new", "review_failed")
+SOURCES = ("new", "failed")
 STATS_REPORTS = ["profiles_by_category", "classify_latency", "classify_usage"]
 
 
@@ -29,7 +28,7 @@ def build_parser(st) -> argparse.ArgumentParser:
     ap.add_argument(
         "--source",
         choices=SOURCES,
-        help="какие профили брать по review_status (по умолчанию pending_review)",
+        help="new: без категории и без ошибки (по умолчанию); failed: с ошибкой классификации",
     )
     ap.add_argument(
         "--limit", type=int, help="сколько профилей обработать за запуск (обязателен без --stats)"
@@ -40,7 +39,7 @@ def build_parser(st) -> argparse.ArgumentParser:
     ap.add_argument(
         "--recheck",
         action="store_true",
-        help="переклассифицировать уже проверенные (reviewed -> pending_review -> reviewed); "
+        help="переклассифицировать профили, у которых категория уже есть; "
         "с --source не сочетается",
     )
     ap.add_argument(
@@ -74,7 +73,7 @@ def main() -> None:
     ]
     if missing:
         raise SystemExit(f"Не заданы в scripts/.env: {', '.join(missing)}")
-    source = "reviewed" if args.recheck else (args.source or "pending_review")
+    source = "reviewed" if args.recheck else (args.source or "new")
     try:
         res = asyncio.run(run_classify(st, source, args.limit, args.workers, args.recheck))
     except KeyboardInterrupt:
@@ -82,7 +81,7 @@ def main() -> None:
         return
     print(
         f"[+] Обработано профилей: {res['processed']} "
-        f"(reviewed {res['reviewed']}, review_failed {res['failed']})"
+        f"(с категорией {res['reviewed']}, с ошибкой {res['failed']})"
     )
     print(
         f"[*] Запросов к модели: {res['requests']}, токенов: "

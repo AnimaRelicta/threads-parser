@@ -7,7 +7,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
 from core.geo import (  # noqa: E402
     Signal,
-    about_country,
     country_from_phone,
     find_locations,
     phone_prefix,
@@ -73,7 +72,6 @@ sig = profile_signals(
     about_name="Квартира в Алматы",
     topics=[{"text": "Ташкент"}, {"text": "Недвижимость"}],
 )
-assert about_country(sig) == "OTHER"
 assert {(s.source, s.country) for s in sig} == {
     ("about_location", "OTHER"),
     ("phone", "KZ"),
@@ -95,7 +93,6 @@ sig = profile_signals(
 )
 r = resolve(sig)
 assert (r.country, r.city, r.source, r.conflict) == ("KZ", "Алматы", "about_location", False)
-assert about_country(sig) == "KZ"
 only_phone = profile_signals(
     about_location=None,
     links=[{"kind": "whatsapp", "handle": "998901234567"}],

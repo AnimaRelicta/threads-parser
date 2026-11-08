@@ -5,7 +5,7 @@ import asyncpg
 from config import TH
 from core.textfilter import FILTER_VERSION, classify, hashtags_mentions
 from core.timeutil import parse_dt
-from db.posts import _FILTER_OPEN, _keep_full, upsert_topic
+from db.posts import _FILTER_OPEN, _keep_full
 
 
 async def existing_posts(conn: asyncpg.Connection, codes: list[str]) -> dict[str, dict]:
@@ -36,17 +36,16 @@ async def existing_posts(conn: asyncpg.Connection, codes: list[str]) -> dict[str
 # first_seen_via = 'search': ветка пришла не из профиля.
 LISTED_POST_SQL = f"""
 INSERT INTO posts (
-    code, url, author_username, author_user_id, profile_id, text, topic_id, date_utc,
+    code, url, author_username, author_user_id, profile_id, text, date_utc,
     likes, reply_count, reposts, quotes, hashtags, mentions,
     filter_status, filter_matched, filter_matched_in, filter_version, first_seen_via)
 VALUES ($1, $2, $3, $4, (SELECT id FROM profiles WHERE lower(username) = lower($3)),
-        $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'search')
+        $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'search')
 ON CONFLICT (code) DO UPDATE SET
     profile_id = coalesce(posts.profile_id, EXCLUDED.profile_id),
     author_user_id = coalesce(posts.author_user_id, EXCLUDED.author_user_id),
     url = {_keep_full("url")},
     text = {_keep_full("text")},
-    topic_id = {_keep_full("topic_id")},
     date_utc = {_keep_full("date_utc")},
     hashtags = CASE WHEN {_FILTER_OPEN} THEN EXCLUDED.hashtags ELSE posts.hashtags END,
     mentions = CASE WHEN {_FILTER_OPEN} THEN EXCLUDED.mentions ELSE posts.mentions END,
@@ -69,12 +68,10 @@ RETURNING (xmax = 0) AS inserted
 
 async def save_listed_post(conn: asyncpg.Connection, p: dict) -> bool:
     """Записывает ветку со страницы. True = ветка новая, False = обновлена существующая."""
-    topic = p.get("topic")
     text = p.get("text")
-    status, matched, matched_in = classify(text, topic)
+    status, matched, matched_in = classify(text, p.get("topic"))
     tags, mentions = hashtags_mentions(text)
     async with conn.transaction():
-        topic_id = await upsert_topic(conn, topic) if topic else None
         return bool(
             await conn.fetchval(
                 LISTED_POST_SQL,
@@ -83,7 +80,6 @@ async def save_listed_post(conn: asyncpg.Connection, p: dict) -> bool:
                 p["username"],
                 p.get("user_id"),
                 text,
-                topic_id,
                 parse_dt(p.get("date_utc")),
                 p.get("likes"),
                 p.get("reply_count"),
