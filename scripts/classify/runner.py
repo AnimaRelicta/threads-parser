@@ -22,7 +22,7 @@ from db.runs import finish_run, start_run
 CLAIM_SQL = """
 SELECT id, username, og_title, og_description
 FROM profiles
-WHERE is_target AND NOT is_banned AND review_status = $1 AND id <> ALL($2::bigint[])
+WHERE is_target AND review_status = $1 AND id <> ALL($2::bigint[])
 ORDER BY id
 LIMIT 1
 FOR UPDATE SKIP LOCKED

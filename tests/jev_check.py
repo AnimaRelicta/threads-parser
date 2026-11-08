@@ -163,7 +163,7 @@ except ImportError:  # проверка не требует БД: подстав
 from classify.jev_posts_runner import FROM_WHERE, INSTRUCTIONS, post_state  # noqa: E402
 
 assert "lower(pr.username) = lower(po.author_username)" in FROM_WHERE
-assert "'казахстан'" in FROM_WHERE and "NOT pr.is_banned" in FROM_WHERE
+assert "'казахстан'" in FROM_WHERE 
 assert len(post_state("я" * 5000)) == 3000
 assert build_questions(CATS, True, INSTRUCTIONS)["category"]["instructions"] == INSTRUCTIONS
 

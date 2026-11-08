@@ -18,12 +18,10 @@ from config import Settings
 from core.consts import USERNAME_RE
 from core.fsio import normalize_username, read_usernames
 from core.logs import PSTAT, TAG, log
-from core.spam import rules_with
 from core.timeutil import parse_since
 from db.pool import DB_ERRORS, create_pool, run_sync
 from db.profiles import DONE_STATUSES, ProfileStore, drop_processed, list_targets
 from db.runs import finalize_run, start_run
-from db.spam import class_rules
 from registry.store import get_account, now_iso, pick_accounts
 from scrape.capture import make_handler
 from scrape.consts import BLOCKED_RESOURCES, UNLIMITED_DEPTH
@@ -282,13 +280,7 @@ async def main_async(
     disp = Dispatcher(usernames)
     # Пул на весь запуск: воркеры берут соединения на время одной записи
     pool = await create_pool(st, max_size=max(5, len(accounts) * m + 2))
-    state.store = ProfileStore(
-        pool,
-        Path(args.output),
-        rules_with(st.spam_min_followers),
-        class_rules(st),
-        st.text_geo_sources,
-    )
+    state.store = ProfileStore(pool, Path(args.output), st.text_geo_sources)
     try:
         async with async_playwright() as p:
             outcomes = await asyncio.gather(
@@ -365,11 +357,6 @@ def run(args, st: Settings) -> None:
             f"[*] Берём {'ветки' if mode in ('threads', 'fill') else 'посты'} "
             f"не старше {args.cutoff:%Y-%m-%d %H:%M} UTC"
         )
-    if getattr(args, "only_class", None) and mode != "profile":
-        log(
-            f"[*] --only-class {','.join(map(str, sorted(args.only_class)))}: профили других "
-            "классов пропускаются, у ещё не проверенных класс считается по первым веткам"
-        )
     if getattr(args, "full", False) and mode != "profile":
         log("[*] --full: якорь игнорируется, полный проход по окну")
     if args.comments and mode in ("full", "fill"):
@@ -394,7 +381,6 @@ def run(args, st: Settings) -> None:
         "with_videos": bool(args.with_videos),
         "headless": bool(args.headless),
         "mode": mode,
-        "only_class": sorted(args.only_class) if getattr(args, "only_class", None) else None,
     }
     run_id = run_sync(st, lambda conn: start_run(conn, "profiles", run_settings))
     interrupted = False

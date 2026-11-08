@@ -9,19 +9,15 @@ import asyncpg
 from core.consts import USERNAME_RE
 from core.fsio import normalize_username
 from core.geo import DEFAULT_TEXT_SOURCES, Resolved
-from core.spam import RULES, SpamRules, Verdict
-from core.spamclass import CLASS_RULES, ClassRules, ClassVerdict
 from db import posts as repo
-from db import spam as spam_repo
 from db.profile_data import save_profile_data
 from db.runs import ensure_profile
 
 SOURCE_SQL = {
-    "all": "p.is_target AND NOT p.is_banned",
-    "new": "p.is_target AND NOT p.is_banned "
-    "AND NOT EXISTS (SELECT 1 FROM posts t WHERE t.profile_id = p.id)",
-    "search": "p.is_target AND NOT p.is_banned AND p.discovered_via = 'search'",
-    "authors": "p.is_target AND NOT p.is_banned AND p.discovered_via = 'author'",
+    "all": "p.is_target",
+    "new": "p.is_target AND NOT EXISTS (SELECT 1 FROM posts t WHERE t.profile_id = p.id)",
+    "search": "p.is_target AND p.discovered_via = 'search'",
+    "authors": "p.is_target AND p.discovered_via = 'author'",
 }
 
 
@@ -34,9 +30,9 @@ LEVEL_OF = {
     "only_new": "full",
     "fill": "full",
 }
-# Результаты, после которых профиль обработан: ok/empty, 404, бан, чужой класс.
-# abort/error (429, сбой) и «класс не определён» обработкой не считаются.
-DONE_STATUSES = ("ok", "empty", "not_found", "banned", "skipped")
+# Результаты, после которых профиль обработан: ok/empty, 404.
+# abort/error (429, сбой) обработкой не считаются.
+DONE_STATUSES = ("ok", "empty", "not_found")
 
 
 def levels_covering(mode: str) -> list[str]:
@@ -46,13 +42,13 @@ def levels_covering(mode: str) -> list[str]:
 
 
 async def drop_processed(conn: asyncpg.Connection, names: list[str], mode: str) -> list[str]:
-    """names без профилей, уже обработанных в этом режиме (или глубже) либо забаненных."""
+    """names без профилей, уже обработанных в этом режиме (или глубже)."""
     levels = levels_covering(mode)
     if not levels:
         return names
     rows = await conn.fetch(
         "SELECT lower(username) AS u FROM profiles "
-        "WHERE lower(username) = ANY($1) AND (is_banned OR processed_mode = ANY($2))",
+        "WHERE lower(username) = ANY($1) AND processed_mode = ANY($2)",
         [n.lower() for n in names],
         levels,
     )
@@ -118,18 +114,11 @@ class ProfileStore:
         self,
         pool: asyncpg.Pool,
         media_root: Path,
-        spam_rules: SpamRules = RULES,
-        class_rules: ClassRules = CLASS_RULES,
         text_geo_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES,
     ):
         self.pool = pool
         self.media_root = media_root
-        self.spam_rules = spam_rules  # пороги спам-детектора (в т. ч. SPAM_MIN_FOLLOWERS)
-        self.class_rules = class_rules  # пороги классов 1/2/3 (SPAM_CLASS_*)
         self.text_geo_sources = text_geo_sources  # откуда брать profiles.text_location
-        self.last_classes: dict[
-            int, int | None
-        ] = {}  # profile_id -> последний залогированный класс
 
     async def load(self, username: str) -> ProfileState:
         async with self.pool.acquire() as conn:
@@ -191,32 +180,3 @@ class ProfileStore:
     async def save_threads_light(self, profile_id: int, username: str, items: list[dict]) -> None:
         async with self.pool.acquire() as conn:
             await repo.save_threads_light(conn, profile_id, username, items)
-
-    async def followers_count(self, profile_id: int) -> int | None:
-        async with self.pool.acquire() as conn:
-            return await spam_repo.followers_count(conn, profile_id)
-
-    async def banned_reason(self, profile_id: int) -> str | None:
-        """Причина бана профиля или None, если он не забанен."""
-        async with self.pool.acquire() as conn:
-            return await spam_repo.banned_reason(conn, profile_id)
-
-    async def save_spam_verdict(self, profile_id: int, verdict: Verdict) -> bool:
-        """Записывает вердикт спам-детектора; True, если профиль теперь забанен."""
-        async with self.pool.acquire() as conn:
-            return await spam_repo.save_verdict(conn, profile_id, verdict)
-
-    async def class_state(self, profile_id: int) -> tuple[int | None, datetime | None]:
-        """(класс, когда считали); время None = класс ещё не считали."""
-        async with self.pool.acquire() as conn:
-            return await spam_repo.class_state(conn, profile_id)
-
-    async def detect_class_db(self, profile_id: int) -> ClassVerdict:
-        """Класс по веткам из БД с записью метки (мало веток: метка не пишется)."""
-        async with self.pool.acquire() as conn:
-            return await spam_repo.check_class(conn, profile_id, True, self.class_rules)
-
-    async def save_spam_class(self, profile_id: int, verdict: ClassVerdict) -> None:
-        """Записывает класс профиля (1/2/3 или NULL); при нехватке данных ничего не пишет."""
-        async with self.pool.acquire() as conn:
-            await spam_repo.save_class(conn, profile_id, verdict)

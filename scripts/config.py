@@ -83,16 +83,9 @@ class Settings:
     jev_noul_gate: bool = True  # JEV_NOUL_GATE: вторая проверка «подходит ли хоть один класс 1-6»
     jev_noul_min: float = 0.5  # JEV_NOUL_MIN: Noul ниже = «Прочее»
 
-    # --- спам-детектор (core/spam.py) ----------------------------------------
+    # --- геолокация текстов --------------------------------------------------
     # откуда брать profiles.text_location: title,name,bio,description,threads (TEXT_GEO_SOURCES)
     text_geo_sources: tuple[str, ...] = DEFAULT_TEXT_SOURCES
-    spam_min_followers: int = 1000  # SPAM_MIN_FOLLOWERS: столько подписчиков и больше = не спам
-    # классы 1/2/3 (core/spamclass.py)
-    spam_class_sample: int = 10  # SPAM_CLASS_SAMPLE: сколько первых веток идёт в детекцию
-    spam_class_low_followers: int = 100  # SPAM_CLASS_LOW_FOLLOWERS: меньше = класс 3
-    spam_class_gap_hours: float = 24.0  # SPAM_CLASS_GAP_HOURS: пауза меньше = «часто»
-    spam_class_many_replies: int = 20  # SPAM_CLASS_MANY_REPLIES: медиана ответов >= «много»
-    spam_class_few_replies: int = 5  # SPAM_CLASS_FEW_REPLIES: медиана ответов <= «мало»
 
     # Postgres и Proxy для поиска
     database_url: str | None = None  # DATABASE_URL (пароль только в scripts/.env, не в коде)
@@ -218,12 +211,6 @@ def load_settings() -> Settings:
         jev_noul_gate=_bool(get("JEV_NOUL_GATE"), True),
         jev_noul_min=min(1.0, max(0.0, _float(get("JEV_NOUL_MIN"), 0.5))),
         text_geo_sources=_text_sources(get("TEXT_GEO_SOURCES")),
-        spam_min_followers=max(0, _int(get("SPAM_MIN_FOLLOWERS"), 1000)),
-        spam_class_sample=max(1, _int(get("SPAM_CLASS_SAMPLE"), 10)),
-        spam_class_low_followers=max(0, _int(get("SPAM_CLASS_LOW_FOLLOWERS"), 100)),
-        spam_class_gap_hours=max(0.0, _float(get("SPAM_CLASS_GAP_HOURS"), 24.0)),
-        spam_class_many_replies=max(0, _int(get("SPAM_CLASS_MANY_REPLIES"), 20)),
-        spam_class_few_replies=max(0, _int(get("SPAM_CLASS_FEW_REPLIES"), 5)),
         database_url=(get("DATABASE_URL") or "").strip() or None,
         proxy=(get("PROXY") or "").strip() or None,
     )

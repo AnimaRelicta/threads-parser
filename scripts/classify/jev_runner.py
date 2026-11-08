@@ -1,6 +1,6 @@
 """Классификация профилей КЗ через Jev: отбор (dry-run) и полный прогон.
 
-Отбор: активные профили (is_target, не забанены) -> страна КЗ по итогу core/geo.resolve (тот же
+Отбор: активные профили (is_target) -> страна КЗ по итогу core/geo.resolve (тот же
 расчёт, что у `cli.py geo`) -> есть хоть что-то из about_name / bio|og_description / topics.
 Без --recheck профили, у которых category_id уже есть, пропускаются.
 
@@ -37,7 +37,7 @@ CHARS_PER_TOKEN = 3.0  # грубо для русского текста; тол
 ROWS_SQL = """
 SELECT id, username, about_name, bio, og_description, topics, category_id
 FROM profiles
-WHERE is_target AND NOT is_banned AND id = ANY($1::bigint[])
+WHERE is_target AND id = ANY($1::bigint[])
 ORDER BY id
 """
 SAVE_SQL = """
@@ -106,7 +106,7 @@ async def select_profiles(conn: asyncpg.Connection) -> Selection:
     """Фильтр КЗ, затем поля профиля: about_name, bio (иначе og_description), topics."""
     sel = Selection()
     sel.active = await conn.fetchval(
-        "SELECT count(*) FROM profiles WHERE is_target AND NOT is_banned"
+        "SELECT count(*) FROM profiles WHERE is_target"
     )
     kz_ids = [g.id for g in await load_profile_geo(conn) if g.resolved.country == KZ]
     for r in await conn.fetch(ROWS_SQL, kz_ids):
@@ -127,7 +127,7 @@ def dry_run(sel: Selection, recheck: bool, show: int) -> None:
     todo = sel.todo(recheck)
     chars = sum(len(c.state) for c in todo)
     tokens = int(chars / CHARS_PER_TOKEN)
-    print(f"[*] Активных профилей (is_target, не забанены): {sel.active}")
+    print(f"[*] Активных профилей (is_target): {sel.active}")
     print(f"[*] Из них Казахстан (итог geo.resolve = KZ):    {sel.kz}")
     print(f"    без имени, описания и тем (пропуск):         {sel.no_text}")
     print(f"[+] Подходят под критерии:                       {len(sel.with_text)}")

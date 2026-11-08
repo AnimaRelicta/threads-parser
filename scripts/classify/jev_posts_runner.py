@@ -45,7 +45,7 @@ NOUL_INSTRUCTIONS = (
 FROM_WHERE = f"""
 FROM posts po
 JOIN profiles pr ON lower(pr.username) = lower(po.author_username)
-WHERE lower(btrim(pr.about_location)) = '{COUNTRY_SQL}' AND NOT pr.is_banned
+WHERE lower(btrim(pr.about_location)) = '{COUNTRY_SQL}'
 """
 USABLE = "length(btrim(coalesce(po.text, ''))) >= $1"
 TODO = "AND (po.category_id IS NULL OR $2::boolean)"

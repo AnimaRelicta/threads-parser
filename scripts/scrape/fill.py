@@ -15,7 +15,6 @@ from browser.net import Net
 from core.errors import AuthProblem, OldPost, RateLimited, SkipPost, ThreadAborted
 from core.logs import log
 from db.profiles import ProfileStore
-from scrape.classgate import gate_db, skip
 from scrape.posts import scrape_post
 from scrape.report import new_counts, new_result
 
@@ -34,16 +33,6 @@ async def run_fill(
     result = new_result(username, "fill")
     cnt = new_counts()
     pid = await store.ensure_profile(username)
-    ban = await store.banned_reason(pid)
-    if ban:
-        log(f"[BAN] @{username} в бане: {ban}")
-        result.update(status="banned", note=f"в бане: {ban}", counts=cnt, stop_reason="end")
-        return result
-    wanted = getattr(args, "only_class", None)
-    if wanted:
-        gate = await gate_db(store, pid, username, wanted)
-        if not gate.keep:
-            return skip(result, gate, username)
     pending = await store.pending_threads(pid, args.cutoff, args.limit or None)
     if not pending:
         result.update(status="empty", note="нет неразобранных веток за период (--threads-only)")

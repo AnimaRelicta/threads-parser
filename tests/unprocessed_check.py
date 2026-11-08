@@ -12,7 +12,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 from playwright.async_api import Error as PlaywrightError  # noqa: E402
 
 from db.profiles import DONE_STATUSES, LEVEL_OF, drop_processed, levels_covering  # noqa: E402
-from scrape.classgate import Gate, skip  # noqa: E402
 from scrape.page import wait_profile_ready  # noqa: E402
 
 # какие отметки покрывают режим запуска
@@ -28,7 +27,7 @@ assert (
 
 
 class Conn:
-    """processed: ник(нижний регистр) -> (is_banned, processed_mode)."""
+    """processed: ник(нижний регистр) -> processed_mode."""
 
     def __init__(self, processed):
         self.processed, self.calls = processed, 0
@@ -38,21 +37,18 @@ class Conn:
         return [
             {"u": n}
             for n in names
-            if n in self.processed and (self.processed[n][0] or self.processed[n][1] in levels)
+            if self.processed.get(n) in levels
         ]
 
 
-db = {"a": (False, "profile"), "b": (False, "threads"), "c": (False, "full"), "d": (True, None)}
+db = {"a": "profile", "b": "threads", "c": "full", "d": None}
 names = ["A", "B", "C", "D", "E"]
-assert asyncio.run(drop_processed(Conn(db), names, "profile")) == ["E"]
-assert asyncio.run(drop_processed(Conn(db), names, "threads")) == ["A", "E"]  # бан D исключён
-assert asyncio.run(drop_processed(Conn(db), names, "full")) == ["A", "B", "E"]
+assert asyncio.run(drop_processed(Conn(db), names, "profile")) == ["D", "E"]
+assert asyncio.run(drop_processed(Conn(db), names, "threads")) == ["A", "D", "E"]
+assert asyncio.run(drop_processed(Conn(db), names, "full")) == ["A", "B", "D", "E"]
 c = Conn(db)
 assert asyncio.run(drop_processed(c, names, "fill")) == names and c.calls == 0  # без запроса
 
-# «класс не определён» не считается обработкой: другая причина остановки
-assert skip({}, Gate(False, "x"), "u")["stop_reason"] == "class"
-assert skip({}, Gate(False, "x", final=False), "u")["stop_reason"] == "class_undetermined"
 
 
 class Page:

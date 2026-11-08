@@ -6,8 +6,7 @@
     uv run scripts/cli.py search "олх ветка астана" --since 7d
     uv run scripts/cli.py discover --since 7d --dry-run   # новые профили по авторам
     uv run scripts/cli.py geo stats               # где находятся профили (КЗ/УЗ)
-    uv run scripts/cli.py spam --check            # найти спам-профили (без --apply не банит)
-    uv run scripts/cli.py export spam-classes --since 7d   # выгрузка из БД в xlsx
+    uv run scripts/cli.py export top-authors --since 7d   # выгрузка из БД в xlsx
     uv run scripts/cli.py classify --limit 50      # категории профилей через LLM
     uv run scripts/cli.py jev --dry-run            # профили КЗ для Jev: сколько подходит
     uv run scripts/cli.py jev --all                # полный прогон через Jev
@@ -30,7 +29,6 @@ COMMANDS = {
     "discover": ("discover", "новые профили по авторам постов и веток (discover.py)"),
     "instagram": ("instagram", "связь Threads ↔ Instagram: stats, list, --csv (instagram.py)"),
     "geo": ("geo", "страна/город профилей (КЗ, УЗ): rescan, stats, list (geo.py)"),
-    "spam": ("spam", "спам-профили: проверка по БД, список банов, разбан (spam.py)"),
     "export": ("export", "выгрузка из БД в xlsx: базовые и свои запросы (export.py)"),
     "classify": ("classify.cli", "категории профилей через LLM (classify/cli.py)"),
     "jev": (

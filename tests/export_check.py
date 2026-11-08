@@ -46,7 +46,7 @@ assert bind("SELECT 1", {"since": 1}) == ("SELECT 1", [])
 assert used_params("a :since b ::since c :limit") == {"since", "limit"}, used_params("::since")
 
 # 3. Базовые запросы: у всех есть описание и оба параметра
-assert {"spam-classes", "banned", "profiles", "threads", "top-authors", "instagram"} <= set(
+assert {"profiles", "threads", "top-authors", "instagram"} <= set(
     BASE_QUERIES
 )
 for name, bq in BASE_QUERIES.items():

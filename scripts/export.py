@@ -7,11 +7,11 @@
 
 Примеры (из корня проекта):
     uv run scripts/export.py --list
-    uv run scripts/export.py spam-classes                           # data/export/..._время.xlsx
-    uv run scripts/export.py spam-classes banned --since 7d         # два листа в одном файле
+    uv run scripts/export.py profiles                               # data/export/..._время.xlsx
+    uv run scripts/export.py profiles threads --since 7d            # два листа в одном файле
     uv run scripts/export.py top-authors --since 1m --limit 500 --out data/export/top.xlsx
     uv run scripts/export.py my-query                               # из data/export_queries.sql
-    uv run scripts/export.py --sql "SELECT username FROM profiles WHERE is_banned" --sheet bans
+    uv run scripts/export.py --sql "SELECT username FROM profiles WHERE is_target" --sheet targets
     uv run scripts/export.py --file queries/one.sql --out report.xlsx
 """
 

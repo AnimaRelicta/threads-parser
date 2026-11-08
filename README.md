@@ -21,7 +21,6 @@ threads-parser/
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
 │   ├── dbadmin.py     # CLI: Postgres (migrate/status/import-accounts/import-profiles/import-search/merge-old-profiles)
 │   ├── export.py      # CLI: выгрузка из БД в xlsx (базовые и свои запросы)
-│   ├── spam.py        # CLI: спам-профили (проверка по БД, классы 1/2/3, список банов, разбан)
 │   ├── classify/      # пакет: категории профилей через LLM (запуск: cli.py classify)
 │   ├── core/  db/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
 ├── data/              # списки профилей и запросов, куки, media/captions.txt/summary.json
@@ -162,7 +161,6 @@ approved-постов и состояние очереди `search_jobs`. CSV н
 | `about.py` | Окно «···» → «Об этом профиле»: имя, дата регистрации, местоположение (один раз на профиль, `profiles.about_*`, миграция 009). | `fetch_about` |
 | `header.py` | Шапка профиля из DOM без кликов: темы (чипы), ссылки в био (Telegram, WhatsApp, Instagram), «недавние просмотры» (`profiles.topics/links/recent_views`, миграция 010). | `read_header` |
 | `instagram.py` | Связь профиля с Instagram при открытии: ссылка в шапке > JSON страницы > био > догадка по нику (`instagram_links`, догадка помечена `guessed`). | `resolve_instagram` |
-| `classgate.py` | Отбор профилей по классу 1/2/3 (`--only-class`): класс из БД до открытия профиля или детекция по первым веткам ленты. | `precheck`, `gate_feed`, `gate_db`, `skip` |
 | `fill.py` | Разбор веток, собранных быстрым режимом (`--fill-threads`): ветки берутся из БД, не из ленты. | `run_fill` |
 | `profile.py` | Обработка одного профиля (полный проход: ветки, посты под ветками, медиа). | `run_profile` |
 | `profile_only.py` | Только метаданные профиля без обхода ленты и веток (`--profile-only`). | `run_profile_only` |
@@ -304,7 +302,7 @@ uv run scripts/run.py --accounts account_001,account_002 --workers 2 --since 1m 
 
 Флаги: `--file`, `--accounts`, `--workers`, `--since` (30d, 4w, 1m, 1y или дата), `--limit`,
 `--comments`, `--depth`, `--max-comments`, `--recheck-days`, `--full-rescan`, `--full`,
-`--stop-after`, `--threads-only`, `--fill-threads`, `--profile-only`, `--only-class`, `--only-unprocessed`, `--source`, `--with-videos`, `--no-block`, `--delay`, `--profile-delay`, `--headless`,
+`--stop-after`, `--threads-only`, `--fill-threads`, `--profile-only`, `--only-unprocessed`, `--source`, `--with-videos`, `--no-block`, `--delay`, `--profile-delay`, `--headless`,
 `--debug`, `--output`. Справка: `uv run scripts/run.py -h`.
 
 ### Продолжить с места остановки: `--only-unprocessed`
@@ -315,10 +313,9 @@ uv run scripts/run.py --source all --profile-only --only-unprocessed
 ```
 
 Из списка (профиль, `--file`, `--source`) убираются профили, уже обработанные до конца в
-этом режиме или более глубоком, и забаненные. Отметка `profiles.processed_mode`
+этом режиме или более глубоком. Отметка `profiles.processed_mode`
 (`profile` < `threads` < `full`, миграция 015) ставится сразу по окончании каждого профиля,
-поэтому переживает падение и Ctrl+C. Обработанным считается результат `ok`, `empty`, 404, бан и
-пропуск по чужому классу. Прерванные (429, ошибка браузера или БД) и профили, у которых не
+поэтому переживает падение и Ctrl+C. Обработанным считается результат `ok`, `empty` и 404. Прерванные (429, ошибка браузера или БД) и профили, у которых не
 хватило веток для класса, остаются необработанными и берутся снова. Режим глубже покрывает
 мелкий: `--profile-only --only-unprocessed` пропустит и тех, у кого уже собраны ветки, а
 `--threads-only --only-unprocessed` возьмёт профили, обработанные только `--profile-only`.
@@ -333,34 +330,8 @@ uv run scripts/run.py --source all --profile-only --only-unprocessed
 заканчивается, как только в ленте появилась первая ветка. Если в `scripts/.env` остались свои
 `DELAY` и `PROFILE_DELAY`, они сильнее значений по умолчанию: поправьте их там. Сколько реально
 уходит на профиль и сколько 429: `scripts/db/progress.sql` (блок 3). Ускорять дальше можно
-`--workers` (воркеров на аккаунт) и режимами `--threads-only`, `--only-class`: они не открывают
+`--workers` (воркеров на аккаунт) и режимом `--threads-only`: он не открывает
 каждую ветку.
-
-### Только нужный класс профилей: `--only-class`
-
-```bash
-uv run scripts/run.py --source new --threads-only --only-class 1,2 --since 7d
-uv run scripts/run.py --source all --only-class board_author --comments
-uv run scripts/run.py --fill-threads --source all --only-class 1
-```
-
-Работает в полном проходе, `--threads-only` и `--fill-threads`. Классы: `1` барахолка
-(`board_author`), `2` продавец (`seller`), `3` спамер (`spammer`); пороги — `SPAM_CLASS_*`.
-Решение по профилю:
-
-1. Класс уже считали (`profiles.spam_class_at` не пуст): он берётся из БД. Чужой класс (или
-   «класса нет») — профиль пропускается до открытия страницы, браузер не тратится.
-2. Класса ещё нет: профиль открывается, из ленты читаются первые `SPAM_CLASS_SAMPLE` (10) веток
-   без открытия и без записи в `posts`, по ним считается класс и сохраняется в профиль. Класс
-   подходит: обход идёт как обычно, эти ветки сохраняются. Не подходит: ветки не пишутся
-   вовсе, остаётся только метка класса, и следующий запуск остановится на шаге 1.
-3. `--fill-threads` браузера не использует: класс считается по веткам, уже лежащим в `posts`.
-
-Пропущенный профиль получает в `profile_runs` статус `skipped`, `stop_reason='class'`
-и причину в `note`. Если веток слишком мало для класса (меньше 5), профиль тоже пропускается, но
-метка не пишется и детекция повторится при следующем запуске. Класс не пересчитывается
-для уже проверенных профилей, пока они пропускаются: пересчитать классы по веткам из БД
-можно `uv run scripts/spam.py --check --apply` или обнулить `spam_class_at`. В `--profile-only` флаг игнорируется.
 
 ### Только профиль: `--profile-only`
 
@@ -371,8 +342,7 @@ uv run scripts/run.py --source all --profile-only --headless
 
 Открывает профиль и сохраняет только его данные: подписчиков, био, окно «Об этом профиле»,
 шапку (темы, ссылки, просмотры), связь с Instagram, страну/город. Лента не прокручивается,
-ветки не читаются и не пишутся, вторая вкладка не открывается. Забаненные профили
-пропускаются. Несовместим с `--threads-only` и `--fill-threads`; `--since`, `--limit`,
+ветки не читаются и не пишутся, вторая вкладка не открывается. Несовместим с `--threads-only` и `--fill-threads`; `--since`, `--limit`,
 `--full`, `--stop-after` и флаги про содержимое ветки игнорируются с предупреждением.
 В `profile_runs` пишется `mode='profile'`, колонки `posts_*` нулевые.
 
@@ -412,7 +382,7 @@ uv run scripts/cli.py jev-posts --limit 100       # пробный прогон
 uv run scripts/cli.py jev-posts --all [--recheck] # полный прогон
 ```
 
-`posts JOIN profiles` по `lower(profiles.username) = lower(posts.author_username)`, фильтр `profiles.about_location = «Казахстан»` и не забанен; классифицируется только `posts.text` (короче `--min-chars` пропускается). Категории, пороги, защита «Прочее» и прокси те же, что у `jev`. Результат: `posts.category_id`, `category_raw`, `category_model`, `category_prompt_version`. Пост с ошибкой запроса остаётся без категории и берётся в следующем запуске.
+`posts JOIN profiles` по `lower(profiles.username) = lower(posts.author_username)`, фильтр `profiles.about_location = «Казахстан»`; классифицируется только `posts.text` (короче `--min-chars` пропускается). Категории, пороги, защита «Прочее» и прокси те же, что у `jev`. Результат: `posts.category_id`, `category_raw`, `category_model`, `category_prompt_version`. Пост с ошибкой запроса остаётся без категории и берётся в следующем запуске.
 
 ### Категории профилей: `classify`
 
@@ -438,31 +408,6 @@ uv run scripts/cli.py classify --stats                          # категор
 запуск; 401/403 останавливают его целиком, профиль остаётся как был. Запуск пишется в `runs`
 (`kind='classify'`, итоги в `settings`).
 
-### Спам-профили и автобан: `core/spam.py`, `spam.py`
-
-Бот-профили (ветки каждые 15 минут, без ответов и лайков, одинаковые тексты) отсеиваются сразу по ленте профиля, до открытия веток: в `--threads-only` и в полном проходе сразу после входа в профиль, в `--threads-only` ещё раз по всем собранным веткам. Профиль получает `is_banned = true` и выпадает из `--source`, `--fill-threads`, `classify`. Данные не удаляются.
-
-| Сигнал | Условие | Баллы |
-|---|---|---|
-| `no_engagement` | >= 90% веток без ответов, лайков (<= 1), репостов и цитат | 40 |
-| `high_frequency` | медиана паузы <= 30 мин или >= 48 веток в любые сутки | 30 |
-| `metronome` | >= 60% пауз почти равны медиане (±25%, не меньше 2 мин), медиана <= 3 ч | 30 |
-| `templated` | >= 50% текстов повторяют более ранние (после нормализации чисел, ссылок, знаков) | 25 |
-| `link_spam` | ссылка в >= 70% веток | 15 |
-
-Подписчиков >= `SPAM_MIN_FOLLOWERS` (по умолчанию 1000, `0` = отключено, число берётся из `profiles.followers_count`, миграция 007): не спам при любых сигналах; число неизвестно (`NULL`): проверка как обычно.
-
-Бан: есть `no_engagement` и сумма >= 70. Меньше 8 веток в выборке: вердикт «не спам». Пороги правятся в `SpamRules` (`core/spam.py`).
-
-```bash
-uv run scripts/cli.py db migrate                      # миграция 006
-uv run scripts/cli.py spam --check                    # пробный прогон по накопленным веткам
-uv run scripts/cli.py spam --check --apply            # забанить найденных
-uv run scripts/cli.py spam --check adina.rahatt       # один профиль, со всеми метриками
-uv run scripts/cli.py spam --list                     # кто в бане и почему
-uv run scripts/cli.py spam --unban adina.rahatt       # снять бан и больше не банить
-```
-
 ### Выгрузка из БД в xlsx: `export.py`, `exporter/`
 
 | Модуль | Назначение |
@@ -474,7 +419,7 @@ uv run scripts/cli.py spam --unban adina.rahatt       # снять бан и б�
 
 Запросы идут в read-only транзакции Postgres: `INSERT`/`UPDATE`/`DELETE`/DDL завершатся ошибкой, данные не изменятся. Времена в файле в UTC. Текст, начинающийся с `=`, записывается как текст, а не как формула.
 
-Базовые запросы (`--list`): `spam-classes`, `banned`, `profiles`, `profiles-full`, `threads`, `top-authors`, `instagram`. Смысл `--since` у каждого указан в `--list`.
+Базовые запросы (`--list`): `profiles`, `profiles-full`, `threads`, `top-authors`, `instagram`. Смысл `--since` у каждого указан в `--list`.
 
 Лист `profiles` — только важное, в таком порядке: `id`, `название` (ник), `ссылка`, `заголовок` (название профиля без «(@ник) • Threads…»), `подписчиков`, `веток` (`threads_count`, из og:description), `просмотров` (недавние просмотры из шапки), `bio`, `instagram`, `whatsapp`, `telegram`, `другие ссылки` (из `profiles.links`, ссылки в шапке; instagram: ещё подтверждённая связка из `instagram_links`), `дата создания` (`about_joined`), `локация из био` (`about_location`, «Об этом профиле»), `локация из текста` (`text_location`), `темы` (чипы шапки профиля), `топики` (до 5 тем его веток из справочника `topics` с числом веток), `веток за 7д/30д/90д (оценка)` (в конце листа: `веток` ÷ дней с даты создания × 7/30/90, не больше `веток`; день регистрации в источнике неизвестен, берётся 1-е число месяца; без даты создания — пусто). Прежний широкий лист (категория, класс, бан, статус разбора) — `profiles-full`.
 
@@ -490,40 +435,14 @@ SELECT username, followers_count FROM profiles WHERE followers_count < 100 LIMIT
 
 ```bash
 uv run scripts/cli.py export --list                              # что можно выгрузить
-uv run scripts/cli.py export spam-classes                        # data/export/spam-classes_ДАТА.xlsx
-uv run scripts/cli.py export spam-classes banned --since 7d      # два листа в одном файле
+uv run scripts/cli.py export profiles                            # data/export/profiles_ДАТА.xlsx
+uv run scripts/cli.py export profiles threads --since 7d         # два листа в одном файле
 uv run scripts/cli.py export top-authors --since 1m --limit 500 --out data/export/top.xlsx
 uv run scripts/cli.py export my-query --out D:\work\reports\   # в папку, имя файла автоматически
 uv run scripts/cli.py export --sql "SELECT username FROM profiles WHERE is_banned" --sheet bans
 ```
 
 Нужен пакет `openpyxl` (в `pyproject.toml`; `uv run` подтянет его сам).
-
-### Классы спам-профилей: `core/spamclass.py`
-
-Кроме автобана ботов профиль получает метку класса 1/2/3 (`profiles.spam_class`, миграция 012). Класс **не банит**: это отдельная метка, `is_banned` по-прежнему ставит только `core/spam.py`. Детекция идёт по ленте в тот же момент, что и проверка на бота (`scrape/spamcheck.py`), и по БД командой `spam.py --check`.
-
-В выборку берутся `SPAM_CLASS_SAMPLE` (по умолчанию **10**) самых свежих веток (закреплённая старая ветка в неё не попадает). Меньше 5 веток или счётчик ответов известен меньше чем у 5: класса нет, прежний класс в БД не меняется.
-
-| Класс | Условие (пороги по умолчанию) | Что это обычно |
-|---|---|---|
-| 1 `board_author` | ветки редко (медиана паузы >= 24 ч), ответов много (медиана >= 20) | автор ведёт барахолку, люди сами пишут в комментах, что продают |
-| 2 `seller` | ветки часто (медиана паузы < 24 ч), ответов мало (медиана <= 5) | выкладывает свои товары и объявления в ветки |
-| 3 `spammer` | как класс 2, и подписчиков меньше 100 (число известно) | спамит ветками |
-
-Приоритет: 3 важнее 2; если подписчики неизвестны (`NULL`), класс 3 не назначается. Пороги: `SPAM_CLASS_SAMPLE`, `SPAM_CLASS_GAP_HOURS`, `SPAM_CLASS_MANY_REPLIES`, `SPAM_CLASS_FEW_REPLIES`, `SPAM_CLASS_LOW_FOLLOWERS` в `scripts/.env`.
-
-Базовый прогон тоже берёт по умолчанию **10** первых веток на профиль (`--limit` / `LIMIT`; `--limit 0` или `LIMIT=0` = все; для `--fill-threads` без `--limit` по-прежнему все).
-
-```bash
-uv run scripts/cli.py db migrate                      # миграция 012
-uv run scripts/cli.py spam --check                    # пробный прогон: классы и баны по БД
-uv run scripts/cli.py spam --check --apply            # записать классы (и забанить ботов)
-uv run scripts/cli.py spam --classes                  # профили с классом, итог по классам
-uv run scripts/cli.py spam --classes --class-code 3   # только класс 3
-uv run python tests/spamclass_check.py                # проверка правил без БД
-uv run python tests/classgate_check.py                # проверка отбора --only-class без БД
-```
 
 ### Разбор собранных веток: `--fill-threads` и выбор профилей `--source`
 

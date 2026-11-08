@@ -11,10 +11,6 @@ _URL = "'https://www.threads.com/@' || p.username"
 # profiles.links: [{text, url, kind: instagram|telegram|whatsapp|other, handle}] из шапки профиля
 _LINKS = "CASE WHEN jsonb_typeof(p.links) = 'array' THEN p.links ELSE '[]'::jsonb END"
 
-_CLASS_NAME = (
-    "CASE p.spam_class WHEN 1 THEN 'барахолка' WHEN 2 THEN 'продавец' WHEN 3 THEN 'спамер' END"
-)
-
 # profiles.about_joined: «Октябрь 2026 г.» (или «October 2026») -> 1-е число месяца. Дня в источнике нет.
 _MONTHS = ", ".join(
     f"('{stem}', {n})"
@@ -54,32 +50,6 @@ def _est(days: int) -> str:
 
 
 _SQL = {
-    "spam-classes": (
-        "Профили с классом 1/2/3 (spam_class); --since: когда класс посчитан",
-        f"""
-SELECT p.username, p.spam_class AS class, {_CLASS_NAME} AS class_name,
-       p.followers_count,
-       (p.spam_class_info->'metrics'->>'median_replies')::numeric AS median_replies,
-       (p.spam_class_info->'metrics'->>'median_gap_hours')::numeric AS median_gap_hours,
-       p.spam_class_info->>'reason' AS reason,
-       p.is_banned, p.spam_class_at, {_URL} AS url
-FROM profiles p
-WHERE p.spam_class IS NOT NULL AND (:since::timestamptz IS NULL OR p.spam_class_at >= :since)
-ORDER BY p.spam_class DESC, p.followers_count NULLS LAST, p.username
-LIMIT :limit
-""",
-    ),
-    "banned": (
-        "Забаненные профили и причина; --since: когда забанен",
-        f"""
-SELECT p.username, p.banned_at, p.spam_score, p.ban_reason, p.followers_count,
-       p.spam_whitelist, {_URL} AS url
-FROM profiles p
-WHERE p.is_banned AND (:since::timestamptz IS NULL OR p.banned_at >= :since)
-ORDER BY p.banned_at DESC
-LIMIT :limit
-""",
-    ),
     "profiles": (
         "Лист для выгрузки: id, ник, ссылка, заголовок, подписчики, ветки, просмотры, био, "
         "дата создания, локации, темы, топики, оценка веток за 7/30/90 дней; --since: когда найден",
@@ -128,10 +98,10 @@ LIMIT :limit
 """,
     ),
     "profiles-full": (
-        "Все профили, широко: подписчики, категория, страна, класс, бан; --since: когда найден",
+        "Все профили, широко: подписчики, категория, страна; --since: когда найден",
         f"""
 SELECT p.username, p.followers_count, c.name_ru AS category, p.about_country AS country,
-       p.about_location, p.spam_class, p.is_banned, p.review_status, p.discovered_via,
+       p.about_location, p.review_status, p.discovered_via,
        p.first_seen_at, p.last_scraped_at, p.bio, {_URL} AS url
 FROM profiles p
 LEFT JOIN categories c ON c.id = p.category_id
@@ -153,13 +123,13 @@ LIMIT :limit
 """,
     ),
     "top-authors": (
-        "Авторы по числу веток за период: ответы, класс, подписчики; --since: дата ветки",
+        "Авторы по числу веток за период: ответы, подписчики; --since: дата ветки",
         f"""
 SELECT p.username, count(*) AS threads,
        sum(t.reply_count) AS replies_total,
        percentile_cont(0.5) WITHIN GROUP (ORDER BY t.reply_count) AS replies_median,
        min(t.date_utc) AS first_thread, max(t.date_utc) AS last_thread,
-       p.followers_count, p.spam_class, p.is_banned, {_URL} AS url
+       p.followers_count, {_URL} AS url
 FROM posts t
 JOIN profiles p ON p.id = t.profile_id
 WHERE :since::timestamptz IS NULL OR t.date_utc >= :since
