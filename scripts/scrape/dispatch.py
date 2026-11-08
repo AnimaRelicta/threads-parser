@@ -374,6 +374,7 @@ def run(args, st: Settings) -> None:
         "accounts": accounts,
         "since": args.since,
         "limit": args.limit,
+        "min_threads": getattr(args, "min_threads", 0),
         "comments": bool(args.comments),
         "depth": None if args.depth == UNLIMITED_DEPTH else args.depth,
         "max_comments": args.max_comments,

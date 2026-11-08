@@ -3,6 +3,11 @@
 Данные берутся из JSON ленты (`FeedIndex`): текст, дата, счётчики. Посты под ветками,
 медиа и якорь `profile_anchors` не трогаются: ветки остаются «неразобранными»
 (`posts.last_refreshed_at IS NULL`), полный проход потом заберёт их сам.
+
+С `--min-threads N` цель другая: чтобы у профиля в БД лежало не меньше N веток. Если их уже
+столько, профиль не открывается; иначе лента идёт, пока в БД (известные + новые) не станет N или
+лента не кончится. Известные ветки при этом не останавливают обход (иначе после первого запуска
+лента обрывалась бы на самых свежих), `--limit` и `--stop-after` не применяются.
 """
 
 import asyncio
@@ -27,14 +32,23 @@ async def run_threads(grid_page, net: Net, username: str, args, store: ProfileSt
     cnt = new_counts()
 
     pid = await store.ensure_profile(username)
+    want = int(getattr(args, "min_threads", 0) or 0)
+    known = await store.known_codes(pid)
+    if want and len(known) >= want:
+        log(f"[*] @{username}: в БД уже {len(known)} веток (нужно {want}), профиль пропущен")
+        result.update(
+            counts=cnt, stop_reason="enough", posts_total=0, fresh_posts=0,
+            note=f"в БД уже {len(known)} веток",
+        )  # fmt: skip
+        return result
     feed, fail = await open_profile(grid_page, net, username, pid, store)
     if fail:
         result.update(fail)
         return result
 
     full = bool(getattr(args, "full", False))
-    stop_after = 0 if full else max(1, getattr(args, "stop_after", 1))
-    known = await store.known_codes(pid)
+    stop_after = 0 if (full or want) else max(1, getattr(args, "stop_after", 1))
+    have = len(known)  # веток профиля в БД с учётом уже записанных в этом проходе
     links = Lookahead(iter_post_links(grid_page, True, username))
 
     async def is_pinned(ts: int) -> bool:
@@ -73,7 +87,8 @@ async def run_threads(grid_page, net: Net, username: str, args, store: ProfileSt
         seen += 1
         ts = int(info["ts"])
         is_known = code in known
-        need_pin = (cutoff is not None and ts < cutoff.timestamp()) or is_known or args.limit
+        limit = 0 if want else args.limit
+        need_pin = (cutoff is not None and ts < cutoff.timestamp()) or is_known or limit
         pinned = await is_pinned(ts) if need_pin else False
 
         if cutoff is not None and ts < cutoff.timestamp() and not pinned:
@@ -95,6 +110,7 @@ async def run_threads(grid_page, net: Net, username: str, args, store: ProfileSt
         else:
             result["saved"] += 1
             known_streak = 0
+            have += 1
         log(
             f"[{len(dates)}] {code}: {(iso(ts) or '')[:10]}, ответов {info.get('replies')}"
             + (" (известна)" if is_known else "")
@@ -105,14 +121,17 @@ async def run_threads(grid_page, net: Net, username: str, args, store: ProfileSt
             log(f"[*] {known_streak} известных веток подряд: останавливаюсь (--full отключает)")
             stop_reason = "known"
             break
-        if args.limit and not pinned:
+        if want and have >= want:
+            log(f"[*] В БД {have} веток (нужно {want}): останавливаюсь")
+            stop_reason = "limit"
+            break
+        if limit and not pinned:
             taken += 1
-            if taken >= args.limit:
+            if taken >= limit:
                 stop_reason = "limit"
                 break
         await asyncio.sleep(0)  # отдаём управление другим воркерам
     await flush()
-
 
     result["counts"] = cnt
     result["stop_reason"] = stop_reason

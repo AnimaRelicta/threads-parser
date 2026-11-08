@@ -7,6 +7,7 @@
     uv run scripts/run.py olx_vetka_astana --threads-only --since 7d   # только список веток
     uv run scripts/run.py olx_vetka_astana --fill-threads --since 7d --comments   # разбор этих веток
     uv run scripts/run.py --source new --threads-only --since 7d       # профили без веток
+    uv run scripts/run.py --source all --threads-only --min-threads 50 --only-unprocessed  # до 50 веток на профиль
     uv run scripts/run.py --threads-only --only-unprocessed            # продолжить: только необработанные
     uv run scripts/run.py olx_vetka_astana --profile-only              # только метаданные профиля
     uv run scripts/run.py --source all --profile-only --headless       # то же для всех профилей из БД
@@ -54,6 +55,15 @@ def build_parser(st) -> argparse.ArgumentParser:
         help="откуда взять профили из БД: all (is_target), new (ещё без веток), "
         "или ники через запятую; "
         "добавляется к профилю из командной строки и к --file",
+    )
+    ap.add_argument(
+        "--min-threads",
+        type=int,
+        default=0,
+        metavar="N",
+        help="только с --threads-only: добрать у каждого профиля до N веток в БД (у кого их уже N, "
+        "профиль не открывается); лента идёт мимо известных веток, --limit и --stop-after "
+        "не применяются",
     )
     ap.add_argument(
         "--only-unprocessed",
@@ -192,7 +202,7 @@ PROFILE_ONLY_IGNORED = (
     "--limit",
     "--full",
     "--stop-after",
-    "--only-class",
+    "--min-threads",
 )
 
 
@@ -208,6 +218,10 @@ def main() -> None:
     args = build_parser(st).parse_args()
     if args.stop_after < 1:
         raise SystemExit("--stop-after должен быть не меньше 1")
+    if args.min_threads < 0:
+        raise SystemExit("--min-threads не может быть отрицательным")
+    if args.min_threads and not args.threads_only:
+        raise SystemExit("--min-threads работает только с --threads-only")
     if sum((args.threads_only, args.fill_threads, args.profile_only)) > 1:
         raise SystemExit(
             "--threads-only, --fill-threads и --profile-only несовместимы: это разные режимы"
