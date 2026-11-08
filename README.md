@@ -21,6 +21,7 @@ threads-parser/
 │   ├── accounts.py    # CLI: аккаунты (add/list/relogin/check/export/import)
 │   ├── dbadmin.py     # CLI: Postgres (migrate/status/import-accounts/import-profiles/import-search/merge-old-profiles)
 │   ├── export.py      # CLI: выгрузка из БД в xlsx (базовые и свои запросы)
+│   ├── sqlrun.py      # CLI: свои запросы на изменение БД (data/db_tasks.sql), отбор is_target
 │   ├── classify/      # пакет: категории профилей через LLM (запуск: cli.py classify)
 │   ├── core/  db/  browser/  registry/  scrape/  serp/   # пакеты, см. таблицы ниже
 ├── data/              # списки профилей и запросов, куки, media/captions.txt/summary.json
@@ -443,6 +444,25 @@ uv run scripts/cli.py export --sql "SELECT username FROM profiles WHERE is_banne
 ```
 
 Нужен пакет `openpyxl` (в `pyproject.toml`; `uv run` подтянет его сам).
+
+### Свои запросы на изменение БД: `sqlrun.py`, `data/db_tasks.sql`
+
+Аналог `export.py`, но с записью. Запросы лежат в `data/db_tasks.sql` (`DB_TASKS_FILE`):
+`-- name:`, `-- desc:`, параметры `-- param: имя=значение`, в тексте `:имя::тип`. Без `--apply`
+запрос выполняется и откатывается (видно, сколько строк изменится); `UPDATE`/`DELETE` без `WHERE`
+отклоняются; `SELECT` печатает до 20 строк.
+
+```bash
+uv run scripts/sqlrun.py --list
+uv run scripts/sqlrun.py select-targets                                   # пробный прогон
+uv run scripts/sqlrun.py select-targets --set min_followers=200 --set min_per_day=2 --apply
+uv run scripts/sqlrun.py targets-stats                                    # сколько целевых профилей
+```
+
+`select-targets` ставит `profiles.is_target` по статистике: подписчиков не меньше
+`min_followers` (100) и в среднем не меньше `min_per_day` (1) веток в день с даты регистрации
+(`threads_count` / дни с `about_joined`). Профили без этих данных не меняются: сначала
+`run.py --profile-only`. Парсер берёт профили по `--source` только с `is_target = true`.
 
 ### Разбор собранных веток: `--fill-threads` и выбор профилей `--source`
 
