@@ -62,3 +62,10 @@ WHERE about_raw IS NOT NULL;
 UPDATE profiles
 SET category_id = :category_id::int
 WHERE about_location LIKE '%' || :location::text || '%';
+
+
+-- name: targets-kz-only
+-- desc: выключить из парсинга всех, у кого в «Об этом профиле» не Казахстан (или нет данных)
+UPDATE profiles
+SET is_target = false
+WHERE about_location IS NULL OR about_location NOT LIKE '%Казахстан%';
