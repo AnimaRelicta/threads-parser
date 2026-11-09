@@ -6,6 +6,7 @@
     uv run scripts/cli.py search "олх ветка астана" --since 7d
     uv run scripts/cli.py geo stats               # где находятся профили (КЗ/УЗ)
     uv run scripts/cli.py export top-authors --since 7d   # выгрузка из БД в xlsx
+    uv run scripts/cli.py report --since 1m        # отчёт: все листы в один xlsx
     uv run scripts/cli.py classify --limit 50      # категории профилей через LLM
     uv run scripts/cli.py jev --dry-run            # профили КЗ для Jev: сколько подходит
     uv run scripts/cli.py jev --all                # полный прогон через Jev
@@ -28,6 +29,7 @@ COMMANDS = {
     "instagram": ("instagram", "связь Threads ↔ Instagram: stats, list, --csv (instagram.py)"),
     "geo": ("geo", "страна/город профилей (КЗ, УЗ): rescan, stats, list (geo.py)"),
     "export": ("export", "выгрузка из БД в xlsx: базовые и свои запросы (export.py)"),
+    "report": ("build_report", "сводный отчёт xlsx по data/build_report.sql (build_report.py)"),
     "classify": ("classify.cli", "категории профилей через LLM (classify/cli.py)"),
     "jev": (
         "classify.jev_cli",

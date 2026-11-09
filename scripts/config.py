@@ -41,6 +41,8 @@ class Settings:
     export_dir: Path = ROOT / "data" / "export"
     export_queries_file: Path = ROOT / "data" / "export_queries.sql"  # EXPORT_QUERIES_FILE
     db_tasks_file: Path = ROOT / "data" / "db_tasks.sql"  # DB_TASKS_FILE (sqlrun.py)
+    report_file: Path = ROOT / "data" / "build_report.sql"  # REPORT_FILE (build_report.py)
+    report_dir: Path = ROOT / "data" / "report"  # REPORT_DIR
     output_dir: Path = ROOT / "data" / "output"
     # --- scripts/search.py: поиск по выдаче Threads --------------------------
     search_queries_file: Path = ROOT / "data" / "threads_queries.txt"
@@ -163,6 +165,8 @@ def load_settings() -> Settings:
         export_dir=_path(get("EXPORT_DIR"), ROOT / "data" / "export"),
         export_queries_file=_path(get("EXPORT_QUERIES_FILE"), ROOT / "data" / "export_queries.sql"),
         db_tasks_file=_path(get("DB_TASKS_FILE"), ROOT / "data" / "db_tasks.sql"),
+        report_file=_path(get("REPORT_FILE"), ROOT / "data" / "build_report.sql"),
+        report_dir=_path(get("REPORT_DIR"), ROOT / "data" / "report"),
         output_dir=_path(get("OUTPUT_DIR"), ROOT / "data" / "output"),
         search_queries_file=_path(
             get("SEARCH_QUERIES_FILE"), ROOT / "data" / "threads_queries.txt"

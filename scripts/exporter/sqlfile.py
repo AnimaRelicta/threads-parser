@@ -18,6 +18,7 @@ PARAMS = ("since", "limit")
 _PARAM_RE = re.compile(r"(?<!:):(" + "|".join(PARAMS) + r")\b")  # `::int` не затрагивается
 _NAME_RE = re.compile(r"^--\s*name:\s*(\S+)\s*$", re.I)
 _DESC_RE = re.compile(r"^--\s*desc:\s*(.*)$", re.I)
+_PARAM_LINE = re.compile(r"^--[ \t]*param:[ \t]*(\w+)[ \t]*=[ \t]*(.*?)[ \t]*$", re.I | re.M)
 
 
 @dataclass(frozen=True)
@@ -77,3 +78,13 @@ def bind(sql: str, values: dict) -> tuple[str, list]:
 
 def used_params(sql: str) -> set[str]:
     return set(_PARAM_RE.findall(sql))
+
+
+def declared_params(sql: str) -> dict[str, str]:
+    """Параметры по умолчанию из строк `-- param: имя=значение` (общий формат sqlrun и отчёта)."""
+    return {m.group(1): m.group(2) for m in _PARAM_LINE.finditer(sql)}
+
+
+def strip_comments(sql: str) -> str:
+    """Текст запроса без `-- комментариев` (параметры в комментариях не считаются)."""
+    return "\n".join(line.split("--", 1)[0] for line in sql.splitlines())

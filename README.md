@@ -572,3 +572,27 @@ uv run scripts/dbadmin.py merge-old-profiles --columns bio followers_count   # �
 uv run scripts/dbadmin.py merge-old-profiles --exclude og_image              # кроме этих
 uv run scripts/dbadmin.py merge-old-profiles --overwrite                     # и заполненные
 ```
+
+## Сводный отчёт (`build_report.py`)
+
+Один xlsx на все листы: `REPORT_DIR/threads_report_ГГГГ-ММ-ДД.xlsx` (по умолчанию `data/report/`).
+Листы, их параметры и запросы описаны в `data/build_report.sql` (`REPORT_FILE` или `--file`);
+флаги только включают и выключают листы и задают параметры. Запросы идут в read-only транзакции.
+
+```bash
+uv run scripts/build_report.py --list                          # листы, параметры, on/off
+uv run scripts/build_report.py                                 # листы с `-- enabled: on`
+uv run scripts/build_report.py --since 1m                      # период: 30d, 4w, 1m, 1y или дата
+uv run scripts/build_report.py --only summary categories      # только эти листы
+uv run scripts/build_report.py --on comments runs --off instagram
+uv run scripts/build_report.py --set home_location=Узбекистан  # параметр во всех листах
+uv run scripts/build_report.py --set top-authors.limit=100     # параметр одного листа
+uv run scripts/cli.py report --out data/report/                # то же через cli.py
+```
+
+Блок файла: `-- name:`, `-- desc:`, `-- sheet:` (имя листа), `-- enabled: on|off`, `-- param: имя=значение`
+(в запросе `:имя::тип`, пусто = NULL) и SELECT. Общая логика выносится во фрагмент
+`-- kind: fragment` и подставляется как `{{имя}}` (в файле: `kz-profiles`, `period-posts`, `kz-posts`).
+Страна автора берётся только из `profiles.about_location`. Листы по умолчанию: Сводка, Категории,
+Комментарии, Instagram, Посты, Статистика постов, Динамика, Топ авторов, Профили, Статистика профилей;
+`runs` выключен. Проверка без БД: `uv run python tests/report_cli_check.py`.

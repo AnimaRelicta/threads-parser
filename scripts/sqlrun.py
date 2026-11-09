@@ -26,10 +26,9 @@ import asyncpg
 
 from config import ENV_FILE, load_settings
 from db.pool import run_sync
-from exporter.sqlfile import Query, load_queries_file
+from exporter.sqlfile import Query, declared_params, load_queries_file, strip_comments
 
 SHOW_ROWS = 20  # сколько строк SELECT печатать
-_PARAM_LINE = re.compile(r"^--\s*param:\s*(\w+)\s*=\s*(.*?)\s*$", re.I | re.M)
 _PLACEHOLDER = re.compile(r"(?<!:):([a-z_]\w*)\b", re.I)  # `::int` не затрагивается
 _WRITE_NO_WHERE = re.compile(r"^\s*(UPDATE|DELETE)\b", re.I)
 
@@ -42,15 +41,6 @@ def coerce(value: str) -> int | float | str:
         except ValueError:
             pass
     return value
-
-
-def declared_params(sql: str) -> dict[str, str]:
-    """Параметры по умолчанию из строк `-- param: имя=значение`."""
-    return {m.group(1): m.group(2) for m in _PARAM_LINE.finditer(sql)}
-
-
-def strip_comments(sql: str) -> str:
-    return "\n".join(line.split("--", 1)[0] for line in sql.splitlines())
 
 
 def check_safe(q: Query) -> None:
