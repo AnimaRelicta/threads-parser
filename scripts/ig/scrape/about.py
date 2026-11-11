@@ -13,9 +13,10 @@ from ig.about import is_about_text, parse_about_text
 
 MENU_ITEM = re.compile(r"^(Об аккаунте|About this account)$", re.I)
 ICON_NAMES = ("Параметры", "Options", "Ещё", "More")
+NICK_SELECTOR = 'header section a[role="link"]:has(h2), header h2'  # ник в шапке
 MAX_ICONS = 2  # сколько верхних кнопок «···» пробуем
 SIDEBAR_SHARE = 0.15  # левая панель: центр кнопки левее этой доли ширины окна
-HTML_LIMIT = 300_000  # символов HTML окна в about_raw
+ICONS_WAIT_MS = 10_000  # сколько ждать появления кнопки «···»
 
 FIND_ICONS_JS = r"""
 (names) => {
@@ -37,7 +38,7 @@ FIND_ICONS_JS = r"""
 
 DIALOGS_JS = r"""
 () => [...document.querySelectorAll('[role="dialog"], [aria-modal="true"]')]
-    .map(d => ({text: (d.innerText || '').trim(), html: d.outerHTML}))
+    .map(d => ({text: (d.innerText || '').trim()}))
 """
 
 
@@ -48,8 +49,19 @@ async def _icons(page) -> list[dict]:
     return sorted(main, key=lambda i: (not i["header"], i["y"]))
 
 
+async def _wait_icons(page, timeout_ms: int = ICONS_WAIT_MS) -> list[dict]:
+    """Ждёт кнопку «···»: шапка может дорисовываться уже после загрузки страницы."""
+    waited = 0
+    while True:
+        icons = await _icons(page)
+        if icons or waited >= timeout_ms:
+            return icons
+        await page.wait_for_timeout(500)
+        waited += 500
+
+
 async def _read_window(page, timeout_ms: int) -> dict | None:
-    """Ждёт окно «Об аккаунте» и возвращает его {text, html}; None — не появилось."""
+    """Ждёт окно «Об аккаунте» и возвращает его {text}; None — не появилось."""
     waited = 0
     while waited < timeout_ms:
         for d in await page.evaluate(DIALOGS_JS):
@@ -71,18 +83,46 @@ async def _close(page, url: str) -> None:
     await page.wait_for_timeout(2000)
 
 
+def _result(win: dict) -> dict:
+    fields = parse_about_text(win["text"])
+    rows = fields.pop("rows")
+    return {"fields": fields, "raw": {"text": win["text"], "rows": rows}}
+
+
+async def _open_by_nick(page, url: str) -> dict | None:
+    """Основной путь: клик по нику в шапке профиля открывает «Об аккаунте» (у части профилей
+    «···» нет). None — ника нет или окно не появилось (тогда пробуем «···»)."""
+    nick = page.locator(NICK_SELECTOR).first
+    try:
+        await nick.wait_for(state="visible", timeout=ICONS_WAIT_MS)
+        await nick.click(timeout=3000)
+    except PlaywrightError:
+        return None
+    win = await _read_window(page, 6000)
+    if win is None:
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(400)
+        return None
+    await _close(page, url)
+    return _result(win)
+
+
 async def fetch_about(page, url: str) -> dict | None:
     """Окно «Об аккаунте» открытого профиля -> {fields, raw}; None, если открыть не удалось.
 
-    fields: joined_*, account_location, verified_*, is_verified; raw: text, html (обрезан до
-    HTML_LIMIT, html_truncated), rows. Ошибки браузера не пробрасываются: сбор окна не должен
-    ронять обход профиля."""
+    Сначала клик по нику в шапке, запасной путь — «···» → «Об аккаунте».
+    fields: joined_*, account_location, verified_*, is_verified; raw: text и rows (без HTML).
+    Ошибки браузера не пробрасываются: сбор окна не должен ронять обход профиля."""
     try:
         await page.evaluate("window.scrollTo(0, 0)")
         await page.wait_for_timeout(300)
-        icons = await _icons(page)
+        got = await _open_by_nick(page, url)
+        if got:
+            return got
+        log("    [*] «Об аккаунте»: по нику не открылось, пробуем «···»")
+        icons = await _wait_icons(page, 3000)
         if not icons:
-            log("    [!] «Об аккаунте»: на странице нет кнопки «···»")
+            log("    [!] «Об аккаунте»: нет ни клика по нику, ни кнопки «···»")
             return None
         item = (
             page.locator('[role="menuitem"], button')
@@ -107,16 +147,7 @@ async def fetch_about(page, url: str) -> dict | None:
             if win is None:
                 log("    [!] «Об аккаунте»: окно открылось, но данных в нём не нашли")
                 return None
-            fields = parse_about_text(win["text"])
-            rows = fields.pop("rows")
-            html = win["html"]
-            raw = {
-                "text": win["text"],
-                "html": html[:HTML_LIMIT],
-                "html_truncated": len(html) > HTML_LIMIT,
-                "rows": rows,
-            }
-            return {"fields": fields, "raw": raw}
+            return _result(win)
         tried = min(len(icons), MAX_ICONS)
         log(f"    [!] «Об аккаунте»: пункт не нашли ни в одной из {tried} кнопок")
     except PlaywrightError as e:

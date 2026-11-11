@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Рекордер действий для Instagram: открывает его с куками аккаунта и записывает, на что нажимают.
 
-    uv run scripts/ig_record_clicks.py account_001 [--url https://www.instagram.com/garikkharlamov/]
+    uv run scripts/ig_record_clicks.py account_001 --url https://www.instagram.com/garikkharlamov/ --bodies
                                        [--net] [--bodies]
 
 Дальше всё делаете руками в окне (профиль -> «···» -> «Об аккаунте» и т. д.). Тексты, на которые

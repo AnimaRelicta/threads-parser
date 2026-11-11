@@ -196,3 +196,13 @@ def meta_from_text(text: str | None, username: str) -> dict:
             for ln in links
         ]
     return {k: v for k, v in meta.items() if v is not None}
+
+
+def header_text(text: str | None, limit: int = 2000) -> str:
+    """Текст шапки профиля без подвала страницы (Meta, языки, копирайт): до кнопок
+    «Подписаться»/«Отправить сообщение», иначе до строки «Meta»."""
+    lines = (text or "").splitlines()
+    cut = next((i for i, ln in enumerate(lines) if ln.strip().lower() in _ACTIONS), None)
+    if cut is None:
+        cut = next((i for i, ln in enumerate(lines) if ln.strip() == "Meta"), len(lines))
+    return "\n".join(lines[:cut]).strip()[:limit]

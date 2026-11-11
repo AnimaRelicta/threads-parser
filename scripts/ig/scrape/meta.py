@@ -9,6 +9,7 @@ from ig.db.store import IgStore
 from ig.extract import (
     classify_api,
     find_embedded_user,
+    header_text,
     meta_from_og,
     meta_from_text,
     not_found_from_text,
@@ -72,12 +73,7 @@ async def read_page(page, username: str) -> tuple[str, dict | None, dict | None,
         shown = meta_from_text(info.get("text"), username)
         og = meta_from_og(info.get("og_title"), info.get("og_description"))
         meta, src = {**og, **shown}, "text" if shown else "og"
-        raw = {
-            "title": info.get("title"),
-            "og_title": info.get("og_title"),
-            "og_description": info.get("og_description"),
-            "text": (info.get("text") or "")[:2000],
-        }
+        raw = {"text": header_text(info.get("text"))}
     if meta.get("is_private") is None and private_from_text(info.get("text")):
         meta["is_private"] = True
     return ("ok", meta, raw, src) if meta else ("none", None, None, None)

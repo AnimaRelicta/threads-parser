@@ -13,6 +13,7 @@ IG_LOCK_ID = 7_410_002  # свой advisory-lock: миграции threads и in
 PROFILE_INFO_URL = "/api/v1/users/web_profile_info/?username={username}"
 USER_INFO_URL = "/api/v1/users/{uid}/info/"
 
+HEADER_WAIT_MS = 10_000  # сколько ждать отрисовку шапки профиля (header section)
 PROFILE_SETTLE_MS = 1500  # пауза после открытия профиля перед чтением данных
 BLOCKED_RESOURCES = frozenset({"image", "media", "font"})  # для вкладок, которым картинки не нужны
 

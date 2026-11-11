@@ -1,7 +1,9 @@
 """Открытие профиля Instagram: проверки доступа (вход, checkpoint, 404, 429)."""
 
+from playwright.async_api import Error as PlaywrightError
+
 from config import IG
-from ig.consts import PROFILE_SETTLE_MS
+from ig.consts import HEADER_WAIT_MS, PROFILE_SETTLE_MS
 
 
 def fail_auth(note: str) -> dict:
@@ -28,4 +30,8 @@ async def open_profile(page, username: str, account: str) -> dict | None:
         return fail_rate()
     if status == 404:
         return {"status": "not_found", "note": "профиль не найден"}
+    try:  # шапку рисует React уже после domcontentloaded: без ожидания видны только og:*
+        await page.wait_for_selector("header section", timeout=HEADER_WAIT_MS)
+    except PlaywrightError:
+        pass  # нет шапки (недоступный профиль и т. п.): дальше решают проверки текста
     return None
