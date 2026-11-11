@@ -47,6 +47,14 @@ class IgStore:
         self.ids[new.lower()] = self.ids.pop(username.lower())
         return True
 
+    async def about_fetched(self, username: str) -> bool:
+        async with self.pool.acquire() as conn:
+            return await repo.about_fetched(conn, self.pid(username))
+
+    async def save_about(self, username: str, fields: dict, raw: dict) -> None:
+        async with self.pool.acquire() as conn:
+            await repo.save_about(conn, self.pid(username), fields, raw)
+
     async def mark_processed(self, username: str, mode: str) -> None:
         async with self.pool.acquire() as conn:
             await repo.mark_processed(conn, self.pid(username), mode)

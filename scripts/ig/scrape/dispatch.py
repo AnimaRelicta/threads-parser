@@ -274,6 +274,8 @@ def run(args, st: IgSettings) -> None:
         "delay": args.delay,
         "profile_delay": args.profile_delay,
         "only_unprocessed": bool(args.only_unprocessed),
+        "about": not args.no_about,
+        "refresh_about": bool(args.refresh_about),
     }
     run_id = run_sync(st, lambda conn: start_run(conn, "parse", settings), schema=IG_SCHEMA)
     interrupted = False

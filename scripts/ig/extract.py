@@ -74,9 +74,7 @@ def classify_api(res) -> tuple[str, dict | None]:
             return "rate", None
         if code in (401, 403):
             return "auth", None  # ПРОВЕРИТЬ: Instagram отдаёт 401 и при лимите запросов
-        if code == 404:
-            return "not_found", None
-        return "unknown", None
+        return "unknown", None  # 404 здесь ничего не значит: эндпоинт мог не сработать
     data = res.get("data")
     if isinstance(data, dict) and "user" in data:
         user = data["user"]
@@ -86,17 +84,22 @@ def classify_api(res) -> tuple[str, dict | None]:
     return "unknown", None
 
 
+_COUNT_RE = re.compile(r"^([\d.,\s\xa0]+?)\s*(тыс\.?|млн|млрд|[kmbкм])?$", re.IGNORECASE)
+_MULT = {"тыс": 10**3, "k": 10**3, "к": 10**3, "млн": 10**6, "m": 10**6, "м": 10**6}
+_MULT.update({"млрд": 10**9, "b": 10**9})
+
+
 def parse_count(raw: str) -> int | None:
-    """'1,234' -> 1234; '1.2M' -> 1200000; '12 345' -> 12345."""
-    s = re.sub(r"[\s\xa0]", "", raw or "")
-    if not s:
+    """'1,234' -> 1234; '1.2M' -> 1200000; '9,2 млн' -> 9200000; '3 300' -> 3300."""
+    m = _COUNT_RE.match((raw or "").strip())
+    if not m:
         return None
-    mult = {"k": 10**3, "к": 10**3, "m": 10**6, "м": 10**6}.get(s[-1].lower())
+    num, suffix = m.group(1), (m.group(2) or "").lower().rstrip(".")
     try:
-        if mult:
-            return int(float(s[:-1].replace(",", ".")) * mult)
-        return int(re.sub(r"[.,]", "", s))
-    except ValueError:
+        if suffix:
+            return int(float(re.sub(r"[\s\xa0]", "", num).replace(",", ".")) * _MULT[suffix])
+        return int(re.sub(r"[\s\xa0.,]", "", num))
+    except (ValueError, KeyError):
         return None
 
 
@@ -133,3 +136,63 @@ def private_from_text(text: str | None) -> bool:
     """Закрытый профиль по тексту страницы (только когда API не ответил)."""
     low = (text or "").lower()
     return any(m in low for m in PRIVATE_MARKERS)
+
+
+NOT_FOUND_MARKERS = (
+    "page not found",
+    "страница не найдена",
+    "this page isn't available",
+    "эта страница недоступна",
+    "к сожалению, эта страница недоступна",
+)
+_NUM = r"\d[\d\s\xa0.,]*(?:\s?(?:тыс\.?|млн|млрд|[KkMmBbКкМм]))?"
+_COUNT_LINES = {
+    "posts_count": re.compile(rf"^({_NUM})\s*(?:публикаци\w*|posts?)$", re.IGNORECASE),
+    "followers_count": re.compile(rf"^({_NUM})\s*(?:подписчик\w*|followers?)$", re.IGNORECASE),
+    "following_count": re.compile(rf"^({_NUM})\s*(?:подписок|подписки|following)$", re.IGNORECASE),
+}
+_ACTIONS = ("подписаться", "follow", "отправить сообщение", "message", "подписки", "following")
+_LINK_LINE = re.compile(r"^(?:https?://)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?$", re.IGNORECASE)
+
+
+def not_found_from_text(title: str | None, text: str | None) -> bool:
+    """Страница «профиль недоступен» (Instagram отдаёт её и со статусом 200)."""
+    blob = f"{title or ''}\n{(text or '')[:400]}".lower()
+    return any(m in blob for m in NOT_FOUND_MARKERS)
+
+
+def meta_from_text(text: str | None, username: str) -> dict:
+    """Видимая шапка профиля (русская или английская): имя, три счётчика, био, ссылка.
+
+    Категория отдельно не выделяется (идёт в начале биографии), is_verified/ig_user_id
+    из текста недоступны."""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    meta: dict = {}
+    pos: dict[str, int] = {}
+    for i, ln in enumerate(lines):
+        for key, pat in _COUNT_LINES.items():
+            m = pat.match(ln)
+            if m and key not in pos:
+                pos[key] = i
+                meta[key] = parse_count(m.group(1))
+    if not pos:
+        return {}
+    first, last = min(pos.values()), max(pos.values())
+    if first > 0 and lines[first - 1].lower() != username.lower():
+        meta["full_name"] = lines[first - 1]
+    rest: list[str] = []
+    for ln in lines[last + 1 :]:
+        if ln.lower() in _ACTIONS:
+            break
+        if ln.lower() != username.lower():
+            rest.append(ln)
+    links = [ln for ln in rest if _LINK_LINE.match(ln)]
+    bio = [ln for ln in rest if ln not in links]
+    if bio:
+        meta["biography"] = "\n".join(bio)
+    if links:
+        meta["bio_links"] = [
+            {"url": ln if ln.startswith("http") else f"https://{ln}", "title": None}
+            for ln in links
+        ]
+    return {k: v for k, v in meta.items() if v is not None}

@@ -31,6 +31,12 @@ def build_parser(st: IgSettings) -> argparse.ArgumentParser:
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--profile-only", action="store_true", help="только метаданные профиля")
 
+    ap.add_argument("--no-about", action="store_true", help="не открывать окно «Об аккаунте»")
+    ap.add_argument(
+        "--refresh-about",
+        action="store_true",
+        help="собрать «Об аккаунте» заново (по умолчанию один раз на профиль)",
+    )
     ap.add_argument("--accounts", help="аккаунты через запятую (по умолчанию все активные)")
     ap.add_argument("--tabs", type=int, help=f"вкладок на аккаунт (по умолчанию {st.tabs})")
     ap.add_argument(
@@ -53,6 +59,8 @@ def resolve_args(ap: argparse.ArgumentParser, args: argparse.Namespace, st: IgSe
         ap.error("выберите режим: пока доступен только --profile-only (остальные — шаги 5–6)")
     if not (args.nicks or args.file or args.source):
         ap.error("укажите ники, --file или --source all|new|ник,ник")
+    if args.no_about and args.refresh_about:
+        ap.error("--no-about и --refresh-about несовместимы")
     if args.tabs is not None and args.tabs < 1:
         ap.error("--tabs должен быть не меньше 1")
     args.tabs = args.tabs or st.tabs

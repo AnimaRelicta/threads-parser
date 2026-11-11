@@ -41,7 +41,7 @@ for bad in ("x; DROP TABLE a", "Threads", "1abc", ""):
 names = [v for v, _ in mg.list_migrations()]
 assert names[0] == "001_init" and names == sorted(names), names
 ig_names = [v for v, _ in mg.list_migrations(IG_MIGRATIONS_DIR)]
-assert ig_names == ["001_init"], ig_names
+assert ig_names == ["001_init", "002_about"], ig_names
 
 # --- SQL миграции instagram: всё внутри схемы instagram, нужные таблицы и CHECK
 sql = (IG_MIGRATIONS_DIR / "001_init.sql").read_text(encoding="utf-8")

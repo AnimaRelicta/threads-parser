@@ -259,3 +259,34 @@ async def mark_processed(conn: asyncpg.Connection, pid: int, mode: str) -> None:
         MODE_RANK[mode],
         mode,
     )
+
+
+# ---------- окно «Об аккаунте» ----------
+ABOUT_COLS = (
+    "joined_text",
+    "joined_date",
+    "account_location",
+    "verified_text",
+    "verified_date",
+)
+
+
+async def about_fetched(conn: asyncpg.Connection, pid: int) -> bool:
+    return bool(
+        await conn.fetchval("SELECT about_fetched_at IS NOT NULL FROM profiles WHERE id = $1", pid)
+    )
+
+
+async def save_about(conn: asyncpg.Connection, pid: int, fields: dict, raw: dict) -> None:
+    """Поля окна «Об аккаунте» и всё окно в about_raw; None-поля старое значение не затирают.
+
+    «Аккаунт подтверждён» в окне поднимает is_verified в true (обратно в false не сбрасывает)."""
+    sets = ["about_raw = $2", "about_fetched_at = now()"]
+    args: list = [pid, raw]
+    for col in ABOUT_COLS:
+        if fields.get(col) is not None:
+            args.append(fields[col])
+            sets.append(f"{col} = ${len(args)}")
+    if fields.get("is_verified"):
+        sets.append("is_verified = true")
+    await conn.execute(f"UPDATE profiles SET {', '.join(sets)} WHERE id = $1", *args)
