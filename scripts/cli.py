@@ -27,6 +27,7 @@ COMMANDS = {
     "parse": ("run", "парсинг профилей: посты, медиа, комментарии (run.py)"),
     "search": ("search", "поиск по Threads: посты по запросам (search.py)"),
     "instagram": ("instagram", "связь Threads ↔ Instagram: stats, list, --csv (instagram.py)"),
+    "ig": ("ig.cli", "Instagram: схема БД, профили, парсинг (ig/cli.py: db, accounts)"),
     "geo": ("geo", "страна/город профилей (КЗ, УЗ): rescan, stats, list (geo.py)"),
     "export": ("export", "выгрузка из БД в xlsx: базовые и свои запросы (export.py)"),
     "report": ("build_report", "сводный отчёт xlsx по data/build_report.sql (build_report.py)"),

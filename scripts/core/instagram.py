@@ -27,6 +27,7 @@ IG_KEYS = (
 )
 
 _USERNAME_RE = re.compile(r"^[a-z0-9._]{1,30}$", re.IGNORECASE)
+USERNAME_RE = _USERNAME_RE  # публичное имя для пакета ig
 
 # instagram.com/<ник> в тексте биографии/внешней ссылки
 _BIO_LINK_RE = re.compile(r"(?:instagram\.com|instagr\.am)/([a-z0-9._]{1,30})/?", re.IGNORECASE)

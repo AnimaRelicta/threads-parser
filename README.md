@@ -198,6 +198,77 @@ approved-постов и состояние очереди `search_jobs`. CSV н
   что раньше были в posts.json, поэтому логика обхода и комментариев не менялась. Поиск
   работает через `SearchStore` (`serp/store.py`).
 
+## Instagram (`cli.py ig`)
+
+Перенос Instagram-парсера идёт по шагам, ТЗ: `docs/TZ_instagram.md`. Код в пакете `scripts/ig/`
+(не `instagram/`: имя занято модулем `instagram.py`), данные в отдельной схеме Postgres `instagram`,
+настройки `IG_*` в `scripts/.env`, аккаунты и куки (`data/ig_cookies/`) отдельные от Threads.
+
+```bash
+uv run scripts/cli.py ig db migrate    # схема instagram и миграции (scripts/ig/db/migrations)
+uv run scripts/cli.py ig db status     # применённые миграции, строки в таблицах
+uv run scripts/cli.py ig accounts add 2            # войти в аккаунты Instagram (окно, вручную)
+uv run scripts/cli.py ig accounts check --headless # сессии живы?
+uv run scripts/cli.py ig accounts list             # реестр, статистика, паузы после 429
+uv run scripts/cli.py ig accounts import-legacy --file <insta-parser>/data/accounts.json \
+    --cookies-dir <insta-parser>/data/cookies      # разовый перенос из insta-parser
+uv run scripts/cli.py ig profiles add ник1 @ник2 https://instagram.com/ник3/   # источник cli
+uv run scripts/cli.py ig profiles add --file data/ig_profiles.txt               # источник file
+uv run scripts/cli.py ig profiles add --from-threads --dry-run                  # источник threads
+uv run scripts/cli.py ig profiles list --source threads --status new --limit 20
+uv run scripts/cli.py ig profiles stats
+uv run scripts/cli.py ig parse --profile-only --source all --only-unprocessed --headless
+uv run scripts/cli.py ig parse --profile-only ник1 @ник2 --file data/ig_profiles.txt --dry-run
+```
+
+`ig parse --profile-only` снимает метаданные профиля: имя, био, ссылки, категорию, подписчиков/
+подписки/число публикаций, `is_private/is_verified/is_business`, `ig_user_id`, аватар; сырой ответ
+идёт в `meta_raw`. Источник данных: запрос веб-профиля из контекста страницы, запасные пути: JSON
+страницы и `og:*`. Закрытый профиль получает статус `private`, 404 — `not_found`; оба считаются
+обработанными (`processed_mode='profile'`), 429 и ошибки — нет. Смена ника находится по
+сохранённому `ig_user_id`. Каждая вкладка берёт свой профиль из общей очереди (`n × m` одновременно);
+на 429 аккаунт получает паузу `IG_429_PAUSE`, профиль достаётся другому аккаунту. Итоги: таблицы
+`runs`, `run_accounts`, `profile_runs`, файл `summary.json` в `--output`.
+Режимы `--posts-only`, полный проход и `--fill` добавятся следующими шагами.
+
+`ig profiles add` только кладёт ники в `instagram.profiles`, браузер не открывается. Ник берётся из
+`ника`, `@ника` или ссылки, приводится к нижнему регистру, проверяется по `USERNAME_RE`; служебные
+пути (`p`, `reel`, `explore`…) и мусор отбрасываются с причиной в итоге. Один ник — одна строка:
+у уже существующего `source` не меняется, новый источник дописывается в `sources`, а
+`link_confidence` и связь с threads меняются только вверх (нет → `guessed` → `confirmed`).
+`--from-threads` читает `threads.instagram_links` (по умолчанию только `confirmed`); фильтры:
+`--threads-confidence confirmed|guessed|all`, `--threads-target-only`, `--threads-location` (подстрока
+в `about_location`), `--threads-min-followers`, `--threads-category`, `--limit` (сколько связей
+прочитать, крупные профили первыми), `--dry-run` (только счётчики). Каждый занос пишется в `runs`
+(`kind='import'`), пробный прогон — нет.
+
+Команды `ig accounts`: `add`, `list`, `relogin`, `check`, `proxy`, `export`, `import`,
+`cooldown` (ручная пауза или `--clear`), `import-legacy`. Реестр — `instagram.accounts`,
+куки — `data/ig_cookies/<имя>.json`. Аккаунт, получивший 429, уходит на паузу
+(`accounts.cooldown_until`, `IG_429_PAUSE`) и до её конца не берётся в запуск.
+
+| Модуль | Назначение |
+|---|---|
+| `ig/cli.py` | диспетчер подкоманд `ig` (`db`, `accounts`, `profiles`) |
+| `ig/consts.py` | имя схемы, каталог миграций, lock миграций |
+| `ig/db/admin.py` | `ig db migrate`, `ig db status` поверх общего `db/migrate.py` |
+| `ig/db/accounts.py` | таблица `accounts` (+`cooldown_until`), перенос реестра insta-parser; `register_login`/`mark_run` берутся из `db/accounts.py` |
+| `ig/browser/session.py`, `proxy.py` | куки и проверка сессии Instagram (`/api/v1/accounts/current_user/`), прокси аккаунта |
+| `ig/registry/store.py`, `login.py`, `commands.py`, `cli.py` | реестр, ручной вход, команды `ig accounts` |
+| `ig/profiles_cli.py` | `ig profiles add/list/stats`: разбор флагов, итоговый отчёт |
+| `ig/db/sources.py` | нормализация ника, разбор файла, слияние источников и связи с threads, SQL выборки из `threads.*` |
+| `ig/db/profiles.py` | запись в `profiles` (вставка пачками, слияние с существующими), список и статистика |
+| `ig/db/runs.py` | запуск в `runs`, итоги по аккаунтам и профилям (`finalize_run`) |
+| `ig/db/store.py` | `IgStore`: пул и методы записи для воркеров |
+| `ig/extract.py` | разбор профиля без браузера: API, JSON страницы, `og:*` |
+| `ig/parse_cli.py` | `ig parse`: флаги и проверки |
+| `ig/browser/account.py` | `IgAccount`: браузер, куки, прокси |
+| `ig/scrape/` | `dispatch` (очередь, воркеры, `run`), `entry` (открытие профиля), `meta` (`--profile-only`), `select`, `report` |
+| `ig/db/migrations/001_init.sql` | таблицы: `accounts`, `runs`, `run_accounts`, `profiles` (с `source`: file/threads/cli), `profile_anchors`, `profile_runs`, `posts`, `comments`, `media` |
+
+`db/pool.py` и `db/migrate.py` принимают имя схемы (по умолчанию `threads`), поэтому обе схемы
+мигрируются независимо.
+
 ## Установка
 
 Нужен [uv](https://docs.astral.sh/uv/). Зависимости ставятся при первом `uv run`.

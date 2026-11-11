@@ -2,6 +2,10 @@ scripts/.env
 
 # Куки аккаунтов и их выгрузка (секреты, не SQL-данные)
 data/cookies/*.json
+data/ig_cookies/*.json
+!data/ig_cookies/.gitkeep
+data/ig_output/
+data/ig_accounts.json
 data/export/
 data/report/
 !data/cookies/.gitkeep

@@ -11,6 +11,10 @@ TH = "https://www.threads.com"
 TH_URLS = ["https://www.threads.com", "https://www.threads.net"]
 COOKIE_DOMAIN = ".threads.com"
 
+IG = "https://www.instagram.com"
+IG_APP_ID = "936619743392459"
+IG_COOKIE_DOMAIN = ".instagram.com"
+
 
 DEFAULT_LIMIT = 10  # веток на профиль в базовом прогоне, если LIMIT и --limit не заданы
 
@@ -87,6 +91,45 @@ class Settings:
     # Postgres и Proxy для поиска
     database_url: str | None = None  # DATABASE_URL (пароль только в scripts/.env, не в коде)
     proxy: str | None = None  # PROXY, например socks5://127.0.0.1:12334
+
+    def cookies_path(self, account: str) -> Path:
+        return self.cookies_dir / f"{account}.json"
+
+
+@dataclass
+class IgSettings:
+    """Настройки Instagram-пакета `ig` (переменные IG_* в scripts/.env)."""
+
+    accounts: list[str] | None = None  # пусто = все активные IG-аккаунты
+    tabs: int = 3  # вкладок на аккаунт, m
+    headless: bool = False
+    limit: int = 0  # постов на профиль, 0 = все
+    since: str | None = None
+    comments: bool = False
+    depth: int = 2  # потолок в Instagram: 2 (комментарий и ответы)
+    max_comments: int = 0
+    images: bool = True
+    videos: bool = False
+    avatars: bool = False
+    recheck_days: int = 7
+    stop_after_known: int = 4
+    delay: float = 4.0
+    profile_delay: float = 8.0
+    pause_429: int = 300  # сек, cooldown аккаунта после 429
+    min_free_gb: float = 5.0  # минимум свободного места в хранилище
+    login_timeout: int = 300
+    profiles_file: Path = ROOT / "data" / "ig_profiles.txt"
+    cookies_dir: Path = ROOT / "data" / "ig_cookies"
+    storage_dir: Path = ROOT.parent / "storage" / "instagram-parcer"
+    output_dir: Path = ROOT / "data" / "ig_output"
+    export_dir: Path = ROOT / "data" / "export"
+    export_queries_file: Path = ROOT / "data" / "ig_export_queries.sql"
+    db_tasks_file: Path = ROOT / "data" / "ig_db_tasks.sql"
+    # Только для разового `ig accounts import-legacy` (реестр insta-parser)
+    accounts_file: Path = ROOT / "data" / "ig_accounts.json"
+    # Общие с Threads
+    database_url: str | None = None
+    proxy: str | None = None
 
     def cookies_path(self, account: str) -> Path:
         return self.cookies_dir / f"{account}.json"
@@ -203,6 +246,45 @@ def load_settings() -> Settings:
         jev_min_confidence=min(1.0, max(0.0, _float(get("JEV_MIN_CONFIDENCE"), 0.5))),
         jev_noul_gate=_bool(get("JEV_NOUL_GATE"), True),
         jev_noul_min=min(1.0, max(0.0, _float(get("JEV_NOUL_MIN"), 0.5))),
+        database_url=(get("DATABASE_URL") or "").strip() or None,
+        proxy=(get("PROXY") or "").strip() or None,
+    )
+
+
+def load_ig_settings() -> IgSettings:
+    """Читает IG_* из scripts/.env; переменные окружения имеют приоритет над файлом."""
+    env = parse_env_file(ENV_FILE)
+    env.update({k: v for k, v in os.environ.items() if k in env})
+    get = env.get
+    return IgSettings(
+        accounts=[a.strip() for a in (get("IG_ACCOUNTS") or "").split(",") if a.strip()],
+        tabs=max(1, _int(get("IG_TABS_PER_ACCOUNT"), 3)),
+        headless=_bool(get("IG_HEADLESS"), False),
+        limit=max(0, _int(get("IG_LIMIT"), 0)),
+        since=(get("IG_SINCE") or "").strip() or None,
+        comments=_bool(get("IG_COMMENTS"), False),
+        depth=_int(get("IG_DEPTH"), 2),
+        max_comments=max(0, _int(get("IG_MAX_COMMENTS"), 0)),
+        images=_bool(get("IG_IMAGES"), True),
+        videos=_bool(get("IG_VIDEOS"), False),
+        avatars=_bool(get("IG_AVATARS"), False),
+        recheck_days=max(0, _int(get("IG_RECHECK_DAYS"), 7)),
+        stop_after_known=max(1, _int(get("IG_STOP_AFTER_KNOWN"), 4)),
+        delay=_float(get("IG_DELAY"), 4.0),
+        profile_delay=_float(get("IG_PROFILE_DELAY"), 8.0),
+        pause_429=max(0, _int(get("IG_429_PAUSE"), 300)),
+        min_free_gb=max(0.0, _float(get("IG_MIN_FREE_GB"), 5.0)),
+        login_timeout=_int(get("LOGIN_TIMEOUT_SEC"), 300),
+        profiles_file=_path(get("IG_PROFILES_FILE"), ROOT / "data" / "ig_profiles.txt"),
+        cookies_dir=_path(get("IG_COOKIES_DIR"), ROOT / "data" / "ig_cookies"),
+        storage_dir=_path(get("IG_STORAGE_DIR"), ROOT.parent / "storage" / "instagram-parcer"),
+        output_dir=_path(get("IG_OUTPUT_DIR"), ROOT / "data" / "ig_output"),
+        export_dir=_path(get("EXPORT_DIR"), ROOT / "data" / "export"),
+        export_queries_file=_path(
+            get("IG_EXPORT_QUERIES_FILE"), ROOT / "data" / "ig_export_queries.sql"
+        ),
+        db_tasks_file=_path(get("IG_DB_TASKS_FILE"), ROOT / "data" / "ig_db_tasks.sql"),
+        accounts_file=_path(get("IG_ACCOUNTS_FILE"), ROOT / "data" / "ig_accounts.json"),
         database_url=(get("DATABASE_URL") or "").strip() or None,
         proxy=(get("PROXY") or "").strip() or None,
     )

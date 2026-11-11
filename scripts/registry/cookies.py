@@ -19,14 +19,16 @@ def cookie_jar(data) -> dict:
     return {c.get("name"): c.get("value") for c in cookies if isinstance(c, dict)}
 
 
-def normalize_cookie(c: dict) -> dict | None:
-    """Приводит куку к формату Playwright (понимает выгрузки Cookie-Editor и т.п.)."""
+def normalize_cookie(c: dict, domain: str = COOKIE_DOMAIN) -> dict | None:
+    """Приводит куку к формату Playwright (понимает выгрузки Cookie-Editor и т.п.).
+
+    domain: домен для кук, где он не указан (Threads по умолчанию, Instagram: .instagram.com)."""
     if not isinstance(c, dict) or not c.get("name") or c.get("value") is None:
         return None
     out = {
         "name": str(c["name"]),
         "value": str(c["value"]),
-        "domain": c.get("domain") or COOKIE_DOMAIN,
+        "domain": c.get("domain") or domain,
         "path": c.get("path") or "/",
         "httpOnly": bool(c.get("httpOnly", False)),
         "secure": bool(c.get("secure", True)),
