@@ -3,6 +3,7 @@
 import asyncpg
 
 from ig.db import accounts as accounts_repo
+from ig.db import posts as posts_repo
 from ig.db import profiles as repo
 
 
@@ -62,6 +63,22 @@ class IgStore:
     async def mark_error(self, username: str) -> None:
         async with self.pool.acquire() as conn:
             await repo.set_status(conn, self.pid(username), "error")
+
+    async def posts_context(self, username: str) -> tuple[dict, dict | None]:
+        """Известные посты профиля (code -> счётчики) и якорь (None — прохода ещё не было)."""
+        pid = self.pid(username)
+        async with self.pool.acquire() as conn:
+            return await posts_repo.known_posts(conn, pid), await posts_repo.get_anchor(conn, pid)
+
+    async def save_post_light(self, username: str, post: dict, known: dict) -> str:
+        pid = self.pid(username)
+        async with self.pool.acquire() as conn:
+            return await posts_repo.save_post_light(conn, pid, post, known)
+
+    async def save_anchor(self, username: str, anchor: dict) -> None:
+        pid = self.pid(username)
+        async with self.pool.acquire() as conn:
+            await posts_repo.save_anchor(conn, pid, anchor)
 
     async def set_cooldown(self, account: str, seconds: int) -> None:
         async with self.pool.acquire() as conn:

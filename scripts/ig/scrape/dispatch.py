@@ -18,11 +18,15 @@ from ig.db.runs import finalize_run, start_run
 from ig.db.store import IgStore
 from ig.registry.store import now_iso, pick_accounts
 from ig.scrape.meta import run_profile_only
+from ig.scrape.posts_light import run_posts_only
 from ig.scrape.report import new_result, print_summary, profile_run_entry, write_summary
 from ig.scrape.select import select_profiles
 
-MODE = "profile"  # шаги 5–6 добавят posts и full
-DONE_STATUSES = ("ok", "private", "not_found")  # 429 и ошибки браузера/БД обработкой не считаются
+MODE_TITLES = {
+    "profile": "--profile-only: только метаданные профиля",
+    "posts": "--posts-only: посты без комментариев и медиа",
+}
+DONE_STATUSES = ("ok", "empty", "private", "not_found")  # 429 и ошибки браузера/БД обработкой не считаются
 
 
 class Dispatcher:
@@ -98,10 +102,17 @@ async def handle_abort(
             log(f"[!] Пауза аккаунта не записана: {str(e)[:150]}")
 
 
+def mode_of(args) -> str:
+    """Режим запуска: profile | posts (шаг 6 добавит full)."""
+    return "posts" if getattr(args, "posts_only", False) else "profile"
+
+
 async def process_job(acc, page, name, args, st, state) -> dict:
     """Один профиль: результат всегда словарь (ошибка браузера или БД — статус error)."""
+    mode = mode_of(args)
     try:
-        return await run_profile_only(page, name, args, state.store, acc.name)
+        run_one = run_posts_only if mode == "posts" else run_profile_only
+        return await run_one(page, name, args, state.store, acc.name)
     except (PlaywrightError, *DB_ERRORS) as e:
         is_db = not isinstance(e, PlaywrightError)
         log(f"[!] Ошибка {'БД' if is_db else 'браузера'}: {str(e)[:200]}")
@@ -109,7 +120,7 @@ async def process_job(acc, page, name, args, st, state) -> dict:
             await state.store.mark_error(name)
         except DB_ERRORS:
             pass
-        return new_result(name, MODE, "error", "ошибка БД" if is_db else "ошибка браузера")
+        return new_result(name, mode, "error", "ошибка БД" if is_db else "ошибка браузера")
 
 
 async def worker_main(
@@ -167,7 +178,7 @@ async def worker_main(
                         continue
                 if res["status"] in DONE_STATUSES:
                     try:  # отметка сразу, не в конце запуска: переживает падение и Ctrl+C
-                        await state.store.mark_processed(res["username"], MODE)
+                        await state.store.mark_processed(res["username"], mode_of(args))
                     except DB_ERRORS as e:
                         log(f"[!] Отметка «обработан» не записана: {str(e)[:150]}")
                 state.got[name] = res
@@ -246,12 +257,13 @@ async def main_async(accounts: list[str], names: list[str], args, st, state: Run
 
 
 def run(args, st: IgSettings) -> None:
-    """ig parse --profile-only: выбор профилей, запуск браузеров, итоги в БД и summary.json."""
-    names, ids = run_sync(st, lambda conn: select_profiles(conn, args, MODE), schema=IG_SCHEMA)
+    """ig parse (--profile-only | --posts-only): выбор профилей, браузеры, итоги в БД и summary.json."""
+    mode = mode_of(args)
+    names, ids = run_sync(st, lambda conn: select_profiles(conn, args, mode), schema=IG_SCHEMA)
     if args.only_unprocessed:
         log(f"[*] --only-unprocessed: к обработке {len(names)}")
     if args.dry_run:
-        log(f"[*] Пробный прогон: режим {MODE}, профилей {len(names)}, браузер не запускается")
+        log(f"[*] Пробный прогон: режим {mode}, профилей {len(names)}, браузер не запускается")
         for n in names:
             log(f"    @{n}")
         return
@@ -260,13 +272,13 @@ def run(args, st: IgSettings) -> None:
         return
     accounts = asyncio.run(pick_accounts(st, args.accounts))
     log(
-        f"[*] Режим --profile-only: только метаданные профиля | профилей: {len(names)} | "
+        f"[*] Режим {MODE_TITLES[mode]} | профилей: {len(names)} | "
         f"аккаунтов: {len(accounts)} | вкладок на аккаунт: {args.tabs} "
         f"(одновременно до {len(accounts) * args.tabs} профилей)"
     )
     state = RunState(ids=ids)
     settings = {
-        "mode": MODE,
+        "mode": mode,
         "profiles_requested": len(names),
         "accounts": accounts,
         "tabs": args.tabs,
@@ -277,6 +289,14 @@ def run(args, st: IgSettings) -> None:
         "about": not args.no_about,
         "refresh_about": bool(args.refresh_about),
     }
+    if mode == "posts":
+        settings.update(
+            since=args.since,
+            limit=args.limit,
+            full=bool(args.full),
+            stop_after=args.stop_after,
+            min_posts=args.min_posts,
+        )
     run_id = run_sync(st, lambda conn: start_run(conn, "parse", settings), schema=IG_SCHEMA)
     interrupted = False
     try:
@@ -304,7 +324,7 @@ def run(args, st: IgSettings) -> None:
         except (Exception, SystemExit) as e:
             log(f"[!] Итоги запуска не записаны в БД (запуск #{run_id}): {str(e)[:200]}")
     results = [
-        state.got.get(n) or new_result(n, MODE, "not_run", "не обработан: запустите ещё раз")
+        state.got.get(n) or new_result(n, mode, "not_run", "не обработан: запустите ещё раз")
         for n in names
     ]
     print_summary(results)

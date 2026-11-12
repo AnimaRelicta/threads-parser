@@ -16,7 +16,7 @@ def new_result(username: str, mode: str, status: str = "ok", note: str = "", **e
     """Пустой итог профиля: ключи, которые читают print_summary и profile_run_entry."""
     return {
         "username": username,
-        "status": status,  # ok | private | not_found | abort | error | not_run
+        "status": status,  # ok | empty | private | not_found | abort | error | not_run
         "mode": mode,
         "note": note,
         "abort_kind": None,  # 429 | auth | None
@@ -27,7 +27,7 @@ def new_result(username: str, mode: str, status: str = "ok", note: str = "", **e
 
 
 def profile_run_entry(res: dict) -> dict:
-    """Запись о запуске профиля для profile_runs (блоки posts/comments/media пока нулевые)."""
+    """Запись о запуске профиля для profile_runs (comments/media пока нулевые)."""
     return {
         "username": res.get("username"),
         "status": res.get("status"),
@@ -38,10 +38,10 @@ def profile_run_entry(res: dict) -> dict:
         "started_at": res.get("started_at"),
         "finished_at": res.get("finished_at"),
         "duration_sec": res.get("duration_sec"),
-        "posts": {},
+        "posts": res.get("posts") or {},
         "comments": {},
         "media": {},
-        "pages_opened": 0,
+        "pages_opened": res.get("pages_opened") or 0,
     }
 
 
@@ -56,6 +56,10 @@ def print_summary(results: list[dict]) -> None:
             f"подписчиков: {followers if followers is not None else '—'} | "
             f"режим: {MODE_LABELS.get(r.get('mode'), r.get('mode'))}"
         )
+        p = r.get("posts")
+        if p:
+            line += f" | постов: новых {p.get('new', 0)}, обновлено {p.get('refreshed', 0)}"
+            line += f" | остановка: {r.get('stop_reason') or '—'}"
         if r["note"]:
             line += f" | {r['note']}"
         log(line)

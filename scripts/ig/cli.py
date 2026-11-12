@@ -8,7 +8,7 @@
     uv run scripts/cli.py ig profiles add --file data/ig_profiles.txt   # занести профили в БД
     uv run scripts/cli.py ig parse --profile-only --source all          # метаданные профилей
 
-Остальные подкоманды (export, sql) и режимы parse добавляются по шагам ТЗ.
+Остальные подкоманды (export, sql) и режим полного прохода добавляются по шагам ТЗ.
 Подкоманда получает остаток командной строки без изменений.
 """
 
@@ -19,7 +19,7 @@ COMMANDS = {
     "db": ("ig.db.admin", "схема instagram: migrate, status"),
     "accounts": ("ig.registry.cli", "аккаунты: add, list, relogin, check, proxy, import, export"),
     "profiles": ("ig.profiles_cli", "профили: add (файл, ники, threads), list, stats"),
-    "parse": ("ig.parse_cli", "парсинг: --profile-only (метаданные профилей)"),
+    "parse": ("ig.parse_cli", "парсинг: --profile-only (метаданные), --posts-only (посты)"),
 }
 
 

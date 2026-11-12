@@ -35,3 +35,7 @@ async (url) => {
 }
 """
 ).replace("__APP_ID__", IG_APP_ID)
+
+# Лента профиля (веб-клиент): новые посты первыми, постранично по next_max_id.
+# ПРОВЕРИТЬ НА ЖИВОЙ СЕССИИ: имена полей ответа (см. ig/feed.py) и допустимый count.
+FEED_URL = "/api/v1/feed/user/{username}/username/?count=12"

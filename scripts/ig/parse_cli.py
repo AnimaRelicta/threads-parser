@@ -4,13 +4,18 @@
     uv run scripts/cli.py ig parse --profile-only ник1 @ник2 --file data/ig_profiles.txt
     uv run scripts/cli.py ig parse --profile-only --source new --dry-run
 
-Сейчас доступен режим --profile-only (метаданные профиля). Посты (--posts-only) и полный
-проход (посты, комментарии, медиа, --fill) добавляются следующими шагами ТЗ.
+    uv run scripts/cli.py ig parse --posts-only --source all --since 30d --headless
+    uv run scripts/cli.py ig parse --posts-only --source new --limit 50 --min-posts 20
+
+Доступны режимы --profile-only (метаданные профиля) и --posts-only (лента без комментариев
+и медиа). Полный проход (комментарии, медиа, --fill) добавляется следующим шагом ТЗ.
 Флаги сильнее значений IG_* из scripts/.env.
 """
 
 import argparse
 from pathlib import Path
+
+from core.timeutil import parse_since
 
 from config import IgSettings, load_ig_settings
 
@@ -30,6 +35,22 @@ def build_parser(st: IgSettings) -> argparse.ArgumentParser:
 
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--profile-only", action="store_true", help="только метаданные профиля")
+    mode.add_argument(
+        "--posts-only", action="store_true", help="лента: посты без комментариев и медиа"
+    )
+
+    feed = ap.add_argument_group("лента (только с --posts-only)")
+    feed.add_argument("--since", help=f"окно: 30d, 4w, 1m, 1y или дата ({st.since or 'без границы'})")
+    feed.add_argument("--limit", type=int, help=f"постов на профиль, 0 = все ({st.limit})")
+    feed.add_argument("--full", action="store_true", help="игнорировать якорь: пройти окно целиком")
+    feed.add_argument(
+        "--stop-after",
+        type=int,
+        help=f"остановка после серии уже известных постов ({st.stop_after_known})",
+    )
+    feed.add_argument(
+        "--min-posts", type=int, default=0, help="добрать до N постов у профиля (по умолчанию 0)"
+    )
 
     ap.add_argument("--no-about", action="store_true", help="не открывать окно «Об аккаунте»")
     ap.add_argument(
@@ -55,14 +76,30 @@ def build_parser(st: IgSettings) -> argparse.ArgumentParser:
 
 def resolve_args(ap: argparse.ArgumentParser, args: argparse.Namespace, st: IgSettings) -> None:
     """Проверки совместимости и подстановка значений по умолчанию из IgSettings."""
-    if not args.profile_only:
-        ap.error("выберите режим: пока доступен только --profile-only (остальные — шаги 5–6)")
+    if not (args.profile_only or args.posts_only):
+        ap.error("выберите режим: --profile-only или --posts-only (полный проход — шаг 6)")
+    feed_flags = [n for n, v in (("--since", args.since), ("--limit", args.limit),
+                  ("--full", args.full), ("--stop-after", args.stop_after),
+                  ("--min-posts", args.min_posts)) if v]
+    if feed_flags and not args.posts_only:
+        ap.error(f"{', '.join(feed_flags)} работают только с --posts-only")
+    if args.posts_only and (args.no_about or args.refresh_about):
+        ap.error("--no-about и --refresh-about относятся к --profile-only")
+    for name, v in (("--limit", args.limit), ("--min-posts", args.min_posts)):
+        if v is not None and v < 0:
+            ap.error(f"{name} не может быть отрицательным")
+    if args.stop_after is not None and args.stop_after < 1:
+        ap.error("--stop-after должен быть не меньше 1")
     if not (args.nicks or args.file or args.source):
         ap.error("укажите ники, --file или --source all|new|ник,ник")
     if args.no_about and args.refresh_about:
         ap.error("--no-about и --refresh-about несовместимы")
     if args.tabs is not None and args.tabs < 1:
         ap.error("--tabs должен быть не меньше 1")
+    args.since = args.since or st.since
+    args.cutoff = parse_since(args.since)  # одно значение на весь запуск
+    args.limit = st.limit if args.limit is None else args.limit
+    args.stop_after = args.stop_after or st.stop_after_known
     args.tabs = args.tabs or st.tabs
     args.headless = st.headless if args.headless is None else args.headless
     args.delay = st.delay if args.delay is None else args.delay
