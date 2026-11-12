@@ -14,23 +14,33 @@ _LOGIN_MESSAGES = ("login_required", "checkpoint_required", "consent_required")
 _RATE_MARKERS = ("wait a few minutes", "rate limit", "too many")
 
 
-def classify_feed(res) -> tuple[str, dict | None]:
-    """Ответ JS_FETCH -> (вид, страница): page | rate | auth | forbidden | not_found | error.
+def classify_error(res) -> str | None:
+    """Ответ JS_FETCH без данных -> rate | auth | forbidden | not_found | error; None — данные есть.
 
-    Страница: {"items": [...], "next": курсор или None, "more": bool}.
     403 отдельно от 401: так бывает у закрытого профиля, это не обязательно проблема сессии."""
     if not isinstance(res, dict):
-        return "error", None
+        return "error"
     if "error" in res:
-        code = res["error"]
-        return {429: "rate", 401: "auth", 403: "forbidden", 404: "not_found"}.get(code, "error"), None
+        return {429: "rate", 401: "auth", 403: "forbidden", 404: "not_found"}.get(
+            res["error"], "error"
+        )
     if res.get("status") == "fail":
         msg = str(res.get("message") or "").lower()
         if any(m in msg for m in _RATE_MARKERS):
-            return "rate", None
+            return "rate"
         if any(m in msg for m in _LOGIN_MESSAGES):
-            return "auth", None
-        return "error", None
+            return "auth"
+        return "error"
+    return None
+
+
+def classify_feed(res) -> tuple[str, dict | None]:
+    """Ответ ленты -> (вид, страница): page | rate | auth | forbidden | not_found | error.
+
+    Страница: {"items": [...], "next": курсор или None, "more": bool}."""
+    bad = classify_error(res)
+    if bad:
+        return bad, None
     items = res.get("items")
     if not isinstance(items, list):
         return "error", None
@@ -113,4 +123,58 @@ def post_from_item(item: dict) -> dict | None:
             item.get("comments_disabled") or item.get("commenting_disabled_for_viewer")
         ),
         "carousel_size": size,
+    }
+
+
+def _best(candidates) -> dict | None:
+    """Самый большой кандидат из image_versions2.candidates / video_versions."""
+    cands = [c for c in candidates or [] if isinstance(c, dict) and c.get("url")]
+    return max(cands, key=lambda c: (c.get("width") or 0) * (c.get("height") or 0), default=None)
+
+
+def media_slides(item: dict) -> list[dict]:
+    """Фото и видео поста по слайдам: [{position, kind, url, width, height, duration}].
+
+    kind image — фото (у видео-слайда это обложка, её отдельно не качаем); kind video — видео."""
+    nodes = item.get("carousel_media") or [item]
+    out = []
+    for i, n in enumerate(nodes, 1):
+        video = _best(n.get("video_versions"))
+        pic = _best((n.get("image_versions2") or {}).get("candidates"))
+        src = video if (n.get("media_type") == 2 or video) and video else pic
+        if not src:
+            continue
+        out.append(
+            {
+                "position": i,
+                "kind": "video" if src is video else "image",
+                "url": src["url"],
+                "width": src.get("width"),
+                "height": src.get("height"),
+                "duration": n.get("video_duration") if src is video else None,
+            }
+        )
+    return out
+
+
+def comment_from_dict(c: dict, post_code: str, parent_id: str | None) -> dict | None:
+    """Комментарий или ответ -> строка comments (depth 1 или 2)."""
+    cid = c.get("pk") or c.get("id")
+    if not cid:
+        return None
+    user = c.get("user") if isinstance(c.get("user"), dict) else {}
+    ts = c.get("created_at_utc") or c.get("created_at")
+    return {
+        "id": str(cid),
+        "post_code": post_code,
+        "parent_id": parent_id,
+        "depth": 2 if parent_id else 1,
+        "author_username": user.get("username"),
+        "author_id": str(user["pk"]) if user.get("pk") else None,
+        "text": c.get("text"),
+        "created_at": datetime.fromtimestamp(int(ts), tz=timezone.utc)
+        if isinstance(ts, (int, float))
+        else None,
+        "likes": c.get("comment_like_count"),
+        "reply_count": c.get("child_comment_count") or 0,
     }

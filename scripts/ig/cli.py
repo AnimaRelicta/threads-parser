@@ -7,8 +7,10 @@
     uv run scripts/cli.py ig accounts add 2     # аккаунты Instagram: add, list, check, import ...
     uv run scripts/cli.py ig profiles add --file data/ig_profiles.txt   # занести профили в БД
     uv run scripts/cli.py ig parse --profile-only --source all          # метаданные профилей
+    uv run scripts/cli.py ig export ig-profiles --out data/export/   # xlsx по листу на запрос
+    uv run scripts/cli.py ig sql targets-stats                       # запросы на изменение БД
 
-Остальные подкоманды (export, sql) и режим полного прохода добавляются по шагам ТЗ.
+Остальное (import-legacy) добавляется по шагам ТЗ.
 Подкоманда получает остаток командной строки без изменений.
 """
 
@@ -19,7 +21,9 @@ COMMANDS = {
     "db": ("ig.db.admin", "схема instagram: migrate, status"),
     "accounts": ("ig.registry.cli", "аккаунты: add, list, relogin, check, proxy, import, export"),
     "profiles": ("ig.profiles_cli", "профили: add (файл, ники, threads), list, stats"),
-    "parse": ("ig.parse_cli", "парсинг: --profile-only (метаданные), --posts-only (посты)"),
+    "parse": ("ig.parse_cli", "парсинг: --profile-only, --posts-only, --fill, полный проход"),
+    "export": ("ig.export_cli", "выгрузка в xlsx: ig-profiles, ig-posts, ig-comments, ig-media ..."),
+    "sql": ("ig.sql_cli", "свои запросы на изменение БД (пробный прогон, --apply)"),
 }
 
 

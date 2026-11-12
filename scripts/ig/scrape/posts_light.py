@@ -4,6 +4,7 @@ import asyncio
 import random
 from urllib.parse import quote
 
+from core.errors import AuthProblem, RateLimited
 from core.logs import log
 from core.timeutil import iso
 from ig.consts import FEED_URL, JS_FETCH
@@ -18,17 +19,33 @@ from scrape.consts import OLD_STREAK_STOP
 MAX_FEED_ERRORS = 2  # подряд ответов ленты без разбора, после чего профиль = error
 
 
+async def open_checked(page, username: str, account: str, store: IgStore, res: dict) -> bool:
+    """Открывает профиль; False — res уже заполнен отказом (не найден, 429, вход)."""
+    fail = await open_profile(page, username, account)
+    if not fail:
+        return True
+    res.update(fail)
+    if fail["status"] == "not_found":
+        await store.save_meta(username, "not_found", None, fail.get("reason"))
+    return False
+
+
 async def run_posts_only(page, username: str, args, store: IgStore, account: str) -> dict:
-    """Лента одного профиля -> posts (лёгкие); возвращает результат для summary и profile_runs.
+    return await run_feed(page, username, args, store, account)
+
+
+async def run_feed(
+    page, username: str, args, store: IgStore, account: str, mode: str = "posts", extras=None
+) -> dict:
+    """Лента одного профиля -> posts; возвращает результат для summary и profile_runs.
+
+    mode posts — лёгкие посты; mode full — для каждого поста ещё extras(post, item, was_known)
+    (комментарии и медиа, ig/scrape/post_extras.py).
 
     Остановка: end (лента кончилась) | old (дальше старше --since) | limit (--limit) |
     known (серия уже известных постов, только если якорь покрывает окно, не при --full)."""
-    res = new_result(username, "posts")
-    fail = await open_profile(page, username, account)
-    if fail:
-        res.update(fail)
-        if fail["status"] == "not_found":
-            await store.save_meta(username, "not_found", None, fail.get("reason"))
+    res = new_result(username, mode)
+    if not await open_checked(page, username, account, store, res):
         return res
 
     known, anchor = await store.posts_context(username)
@@ -81,6 +98,13 @@ async def run_posts_only(page, username: str, args, store: IgStore, account: str
             c[await store.save_post_light(username, post, known)] += 1
             c["in_period"] += 1
             handled.append(post)
+            if extras:
+                try:
+                    await extras(post, item, was_known)
+                except RateLimited:
+                    return _stopped(res, c, pages, fail_rate())
+                except AuthProblem as e:
+                    return _stopped(res, c, pages, fail_auth(str(e) or "сессия недействительна"))
             if pinned:
                 continue
             old_streak = 0

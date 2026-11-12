@@ -80,6 +80,50 @@ class IgStore:
         async with self.pool.acquire() as conn:
             await posts_repo.save_anchor(conn, pid, anchor)
 
+    async def post_states(self, username: str) -> dict[str, dict]:
+        pid = self.pid(username)
+        async with self.pool.acquire() as conn:
+            return await posts_repo.post_states(conn, pid)
+
+    async def posts_to_fill(self, username: str, comments: bool, videos: bool) -> list[dict]:
+        pid = self.pid(username)
+        async with self.pool.acquire() as conn:
+            return await posts_repo.posts_to_fill(conn, pid, comments, videos)
+
+    async def update_post_fields(self, post: dict) -> None:
+        async with self.pool.acquire() as conn:
+            await posts_repo.update_post_fields(conn, post)
+
+    async def known_comments(self, code: str) -> dict[str, int]:
+        async with self.pool.acquire() as conn:
+            return await posts_repo.known_comments(conn, code)
+
+    async def save_comments(self, rows: list[dict]) -> None:
+        async with self.pool.acquire() as conn:
+            await posts_repo.save_comments(conn, rows)
+
+    async def set_comments_state(self, code: str, status: str, depth: int) -> None:
+        async with self.pool.acquire() as conn:
+            await posts_repo.set_comments_state(conn, code, status, depth)
+
+    async def save_media(self, code: str, rows: list[dict]) -> None:
+        async with self.pool.acquire() as conn:
+            await posts_repo.save_media(conn, code, rows)
+
+    async def finish_post(self, code: str, media_status: str | None, failed: int) -> None:
+        async with self.pool.acquire() as conn:
+            await posts_repo.finish_post(conn, code, media_status, failed)
+
+    async def avatar_url(self, username: str) -> str | None:
+        pid = self.pid(username)
+        async with self.pool.acquire() as conn:
+            return await posts_repo.get_pic_url(conn, pid)
+
+    async def set_avatar(self, username: str, file_path: str) -> None:
+        pid = self.pid(username)
+        async with self.pool.acquire() as conn:
+            await posts_repo.set_avatar(conn, pid, file_path)
+
     async def set_cooldown(self, account: str, seconds: int) -> None:
         async with self.pool.acquire() as conn:
             await accounts_repo.set_cooldown(conn, account, seconds)

@@ -8,6 +8,7 @@ from core.logs import log
 MODE_LABELS = {
     "profile": "только профиль",
     "posts": "посты без комментариев",
+    "fill": "добор постов",
     "full": "полный проход",
 }
 
@@ -57,7 +58,9 @@ def print_summary(results: list[dict]) -> None:
             f"режим: {MODE_LABELS.get(r.get('mode'), r.get('mode'))}"
         )
         p = r.get("posts")
-        if p:
+        if p and r.get("mode") == "fill":
+            line += f" | добрано постов: {p.get('refreshed', 0)}"
+        elif p:
             line += f" | постов: новых {p.get('new', 0)}, обновлено {p.get('refreshed', 0)}"
             line += f" | остановка: {r.get('stop_reason') or '—'}"
         if r["note"]:

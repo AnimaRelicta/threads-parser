@@ -17,6 +17,8 @@ from ig.consts import BLOCKED_RESOURCES, IG_SCHEMA
 from ig.db.runs import finalize_run, start_run
 from ig.db.store import IgStore
 from ig.registry.store import now_iso, pick_accounts
+from ig.scrape.fill import run_fill
+from ig.scrape.full import run_full
 from ig.scrape.meta import run_profile_only
 from ig.scrape.posts_light import run_posts_only
 from ig.scrape.report import new_result, print_summary, profile_run_entry, write_summary
@@ -25,6 +27,8 @@ from ig.scrape.select import select_profiles
 MODE_TITLES = {
     "profile": "--profile-only: только метаданные профиля",
     "posts": "--posts-only: посты без комментариев и медиа",
+    "full": "полный проход: посты + комментарии и медиа по флагам",
+    "fill": "--fill: добор постов, собранных --posts-only",
 }
 DONE_STATUSES = ("ok", "empty", "private", "not_found")  # 429 и ошибки браузера/БД обработкой не считаются
 
@@ -102,18 +106,29 @@ async def handle_abort(
             log(f"[!] Пауза аккаунта не записана: {str(e)[:150]}")
 
 
+PROCESSED = {"profile": "profile", "posts": "posts", "full": "full", "fill": "full"}
+RUNNERS = {
+    "profile": run_profile_only,
+    "posts": run_posts_only,
+    "full": run_full,
+    "fill": run_fill,
+}
+
+
 def mode_of(args) -> str:
-    """Режим запуска: profile | posts (шаг 6 добавит full)."""
-    return "posts" if getattr(args, "posts_only", False) else "profile"
+    """Режим запуска: profile | posts | fill | full (полный проход — по умолчанию)."""
+    for flag, mode in (("profile_only", "profile"), ("posts_only", "posts"), ("fill", "fill")):
+        if getattr(args, flag, False):
+            return mode
+    return "full"
 
 
 async def process_job(acc, page, name, args, st, state) -> dict:
     """Один профиль: результат всегда словарь (ошибка браузера или БД — статус error)."""
     mode = mode_of(args)
     try:
-        run_one = run_posts_only if mode == "posts" else run_profile_only
-        return await run_one(page, name, args, state.store, acc.name)
-    except (PlaywrightError, *DB_ERRORS) as e:
+        return await RUNNERS[mode](page, name, args, state.store, acc.name)
+    except (PlaywrightError, OSError, *DB_ERRORS) as e:
         is_db = not isinstance(e, PlaywrightError)
         log(f"[!] Ошибка {'БД' if is_db else 'браузера'}: {str(e)[:200]}")
         try:
@@ -178,7 +193,7 @@ async def worker_main(
                         continue
                 if res["status"] in DONE_STATUSES:
                     try:  # отметка сразу, не в конце запуска: переживает падение и Ctrl+C
-                        await state.store.mark_processed(res["username"], mode_of(args))
+                        await state.store.mark_processed(res["username"], PROCESSED[mode_of(args)])
                     except DB_ERRORS as e:
                         log(f"[!] Отметка «обработан» не записана: {str(e)[:150]}")
                 state.got[name] = res
@@ -259,7 +274,7 @@ async def main_async(accounts: list[str], names: list[str], args, st, state: Run
 def run(args, st: IgSettings) -> None:
     """ig parse (--profile-only | --posts-only): выбор профилей, браузеры, итоги в БД и summary.json."""
     mode = mode_of(args)
-    names, ids = run_sync(st, lambda conn: select_profiles(conn, args, mode), schema=IG_SCHEMA)
+    names, ids = run_sync(st, lambda conn: select_profiles(conn, args, PROCESSED[mode]), schema=IG_SCHEMA)
     if args.only_unprocessed:
         log(f"[*] --only-unprocessed: к обработке {len(names)}")
     if args.dry_run:
@@ -289,13 +304,23 @@ def run(args, st: IgSettings) -> None:
         "about": not args.no_about,
         "refresh_about": bool(args.refresh_about),
     }
-    if mode == "posts":
+    if mode in ("full", "fill"):
+        settings.update(
+            comments=bool(args.comments),
+            depth=args.depth,
+            max_comments=args.max_comments,
+            images=bool(args.images),
+            videos=bool(args.videos),
+            avatars=bool(args.avatars),
+            recheck_days=args.recheck_days,
+        )
+    if mode in ("posts", "full"):
         settings.update(
             since=args.since,
             limit=args.limit,
             full=bool(args.full),
             stop_after=args.stop_after,
-            min_posts=args.min_posts,
+            min_posts=getattr(args, "min_posts", 0),
         )
     run_id = run_sync(st, lambda conn: start_run(conn, "parse", settings), schema=IG_SCHEMA)
     interrupted = False

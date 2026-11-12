@@ -219,7 +219,7 @@ def bad(*argv):
 
 a = parse("--posts-only", "--source", "all", "--since", "30d", "--limit", "5")
 assert a.posts_only and a.limit == 5 and a.cutoff is not None and a.stop_after == st_.stop_after_known
-assert bad("--source", "all") and bad("--profile-only", "--source", "all", "--since", "30d")
+assert not bad("--source", "all") and bad("--profile-only", "--source", "all", "--since", "30d")
 assert bad("--profile-only", "--posts-only", "--source", "all")
 assert bad("--posts-only", "--source", "all", "--no-about") and bad("--posts-only", "x", "--limit", "-1")
 assert bad("--posts-only", "x", "--stop-after", "0") and not bad("--posts-only", "x", "--full")

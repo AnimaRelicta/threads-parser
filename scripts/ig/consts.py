@@ -39,3 +39,8 @@ async (url) => {
 # Лента профиля (веб-клиент): новые посты первыми, постранично по next_max_id.
 # ПРОВЕРИТЬ НА ЖИВОЙ СЕССИИ: имена полей ответа (см. ig/feed.py) и допустимый count.
 FEED_URL = "/api/v1/feed/user/{username}/username/?count=12"
+
+# Пост, комментарии, ответы. ПРОВЕРИТЬ НА ЖИВОЙ СЕССИИ (ТЗ п. 8.3: эндпоинт ответов подтвердить).
+MEDIA_INFO_URL = "/api/v1/media/{media_id}/info/"
+COMMENTS_URL = "/api/v1/media/{media_id}/comments/?can_support_threading=true&permalink_enabled=false"
+CHILD_COMMENTS_URL = "/api/v1/media/{media_id}/comments/{comment_id}/child_comments/?"
