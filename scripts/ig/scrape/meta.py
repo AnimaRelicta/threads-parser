@@ -65,7 +65,10 @@ async def read_page(page, username: str) -> tuple[str, dict | None, dict | None,
         pass
     info = await page.evaluate(PAGE_JS)
     if not_found_from_text(info.get("title"), info.get("text")):
-        return "gone", None, None, None
+        # причина недоступности — текст самой страницы (в meta_raw, не отдельной колонкой)
+        text = header_text(info.get("text"), 500) or (info.get("title") or "").strip()
+        reason = {"source": "page", "raw": {"text": text}}
+        return "gone", None, reason, None
     raw_user = find_embedded_user(docs, username)
     if raw_user:
         meta, raw, src = user_from_dict(raw_user), raw_user, "embedded"
@@ -106,8 +109,8 @@ async def fetch_profile(page, username: str, account: str):
     if kind == "user" and user:
         return None, "api", user_from_dict(user), user
     state, meta, raw, src = await read_page(page, username)
-    if state == "gone":
-        return {"status": "not_found", "note": "профиль не найден"}, None, None, None
+    if state == "gone":  # raw здесь — причина {"source", "raw": {"text"}}
+        return {"status": "not_found", "note": "профиль не найден", "reason": raw}, None, None, None
     if state == "none":
         note = "данные профиля не получены (проверить на живой сессии)"
         return {"status": "error", "note": note}, None, None, None
@@ -128,7 +131,7 @@ async def run_profile_only(page, username: str, args, store: IgStore, account: s
     if fail:
         res.update(fail, note=join_notes(res["note"], fail["note"]))
         if fail["status"] == "not_found":
-            await store.save_meta(username, "not_found", None, None)
+            await store.save_meta(username, "not_found", None, fail.get("reason"))
         elif fail["status"] == "error":
             await store.mark_error(username)
         return res
@@ -151,6 +154,10 @@ async def collect_about(page, username: str, args, store: IgStore, res: dict) ->
         return
     await store.save_about(username, about["fields"], about["raw"])
     f = about["fields"]
+    if f.get("is_kz") is False:
+        res["note"] = join_notes(res["note"], "не Казахстан: is_target=false")
+        log("    [+] Об аккаунте: не Казахстан → is_target=false")
+        return
     if f.get("is_verified"):
         res["verified"] = True
     line = (

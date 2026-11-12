@@ -38,14 +38,14 @@ def parse_month_year(s: str | None) -> date | None:
     return date(int(m.group(2)), month, 1) if m and month else None
 
 
-_STOP = ("значок подтверждения", "the verified badge", "подробнее", "learn more", "закрыть", "close")
 # Заголовки, которые безопасно искать в сплошном тексте (без слова «verified» из пояснений)
+LOCATION_MAX = 80
+KZ_RE = re.compile(r"казахстан|kazakhstan", re.IGNORECASE)
 _FLAT_LABELS = {
     "joined": ABOUT_LABELS["joined"],
     "location": ABOUT_LABELS["location"],
     "verified": ("аккаунт подтвержден", "account verified"),
 }
-LOCATION_MAX = 80
 
 
 def flat(text: str | None) -> str:
@@ -87,9 +87,6 @@ def _flat_fields(text: str) -> dict[str, str | None]:
     for key, (_, end) in spans.items():
         nxt = [a for a in starts if a >= end]
         seg = text[end : min(nxt) if nxt else len(text)]
-        cut = min((i for st in _STOP if (i := low.find(st, end, end + len(seg))) >= 0), default=None)
-        if cut is not None:
-            seg = text[end:cut]
         seg = seg.strip(" :·-")
         if key in ("joined", "verified"):
             head = seg[:40]
@@ -106,7 +103,8 @@ def _flat_fields(text: str) -> dict[str, str | None]:
 
 
 def parse_about_text(text: str | None) -> dict:
-    """Поля окна: joined_*, account_location, verified_*, is_verified и rows (как в окне).
+    """Поля окна: joined_*, account_location, verified_*, is_verified, is_kz и rows (как в окне).
+    Местоположение не Казахстан -> только is_kz=False (поля даты и подтверждения не заполняются).
 
     Сначала сплошной текст (заголовки и значения без разрывов строк), так работает окно
     Instagram. Значение — текст до следующего заголовка; для дат берётся «Месяц ГГГГ [г.]»."""
@@ -118,11 +116,17 @@ def parse_about_text(text: str | None) -> dict:
         a, b = spans[key]
         found[key] = (flat_text[a:b], values.get(key))
     out: dict = {"rows": [[label, value] for label, value in found.values()]}
+    if "location" in found:
+        # Казахстан -> пишем «Казахстан»; любая другая страна -> профиль не целевой,
+        # из окна сохраняем только about_raw (остальные поля пустые)
+        kz = bool(KZ_RE.search(found["location"][1] or ""))
+        out["is_kz"] = kz
+        out["account_location"] = "Казахстан" if kz else None
+        if not kz:
+            return out
     if "joined" in found:
         out["joined_text"] = found["joined"][1]
         out["joined_date"] = parse_month_year(found["joined"][1])
-    if "location" in found:
-        out["account_location"] = found["location"][1]
     if "verified" in found and parse_month_year(found["verified"][1]):
         out["is_verified"] = True
         out["verified_text"] = found["verified"][1]

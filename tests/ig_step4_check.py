@@ -241,8 +241,13 @@ class FakePage:
     async def wait_for_timeout(self, ms):
         pass
 
+    async def wait_for_selector(self, selector, timeout=None):
+        pass
+
     async def evaluate(self, js, arg=None):
         if arg is None:
+            if "innerText" in js and "og:title" not in js:
+                return (self.page_info or {}).get("text", "")
             if "og:title" in js:
                 return self.page_info or {
                     "title": "Instagram",
@@ -329,7 +334,17 @@ async def profile_flow() -> None:
     for pg in (FakePage(status=404), FakePage(page=gone)):
         store = FakeStore()
         r = await meta.run_profile_only(pg, "gone", args, store, "a")
-        assert r["status"] == "not_found" and store.saved == [("gone", "not_found", None, None)]
+        assert r["status"] == "not_found" and len(store.saved) == 1
+        u, st, m, raw = store.saved[0]
+        assert (u, st, m) == ("gone", "not_found", None)
+        assert raw["source"] in ("http", "page") and raw["raw"]["text"], raw  # причина в meta_raw
+    gone["text"] = "К сожалению, эта страница недоступна.\nВозможно, ссылка недействительна. Назад в Instagram.\nMeta\nО нас"
+    store = FakeStore()
+    await meta.run_profile_only(FakePage(page=gone), "gone", args, store, "a")
+    assert store.saved[0][3] == {
+        "source": "page",
+        "raw": {"text": "К сожалению, эта страница недоступна.\nВозможно, ссылка недействительна. Назад в Instagram."},
+    }, store.saved[0][3]
     # смена ника: старый ник 404, по сохранённому id находим новый
     page = FakePage(
         api={
@@ -366,24 +381,30 @@ asyncio.run(profile_flow())
 ABOUT_TEXT = (
     "Об аккаунте\ngarikkharlamov\nЧтобы поддержать подлинность в сообществе, мы показываем "
     "информацию о профилях в Instagram. Подробнее о том, почему это важно.\n"
-    "Дата присоединения\nОктябрь 2013 г.\nМестоположение аккаунта\nРоссийская Федерация\n"
+    "Дата присоединения\nОктябрь 2013 г.\nМестоположение аккаунта\nКазахстан\n"
     "Аккаунт подтверждён\nМарт 2019 г.\nЗначок подтверждения показывает, что аккаунт "
     "подтверждён на основе действий\nПолучите значок подтверждения"
 )
 ab = about_parse.parse_about_text(ABOUT_TEXT)
 assert (ab["joined_text"], str(ab["joined_date"])) == ("Октябрь 2013 г.", "2013-10-01")
-assert ab["account_location"] == "Российская Федерация" and ab["is_verified"] is True
+assert ab["account_location"] == "Казахстан" and ab["is_verified"] is True
 assert (ab["verified_text"], str(ab["verified_date"])) == ("Март 2019 г.", "2019-03-01")
 assert [r[0] for r in ab["rows"]] == [
     "Дата присоединения",
     "Местоположение аккаунта",
     "Аккаунт подтверждён",
 ]
+ru = about_parse.parse_about_text(ABOUT_TEXT.replace("Казахстан", "Российская Федерация"))
+assert ru["is_kz"] is False and ru["account_location"] is None
+assert not any(k in ru for k in ("joined_text", "joined_date", "verified_text", "is_verified"))
 assert about_parse.is_about_text(ABOUT_TEXT) and not about_parse.is_about_text("Подписаться")
 en = about_parse.parse_about_text(
     "About this account\nDate joined\nMarch 2020\nAccount based in\nKazakhstan"
 )
-assert (str(en["joined_date"]), en["account_location"]) == ("2020-03-01", "Kazakhstan")
+assert (str(en["joined_date"]), en["account_location"]) == ("2020-03-01", "Казахстан")
+assert about_parse.parse_about_text(
+    "Дата присоединения Октябрь 2013 г. Местоположение аккаунта Казахстан Предыдущие имена пользователя 1"
+)["account_location"] == "Казахстан"
 assert "is_verified" not in en  # нет строки «подтверждён» — флаг не трогаем
 sep = about_parse.parse_month_year("September 2011")
 assert about_parse.parse_month_year("Сентября 2011") == sep
@@ -451,7 +472,7 @@ class AboutPage:
 async def about_flow() -> None:
     page = AboutPage()
     got = await about_scrape.fetch_about(page, "https://www.instagram.com/g/")
-    assert got["fields"]["account_location"] == "Российская Федерация"
+    assert got["fields"]["account_location"] == "Казахстан"
     assert got["fields"]["is_verified"] is True and "rows" not in got["fields"]
     assert got["raw"]["text"] == ABOUT_TEXT and got["raw"]["html"].startswith("<div>")
     assert got["raw"]["html_truncated"] is False and len(got["raw"]["rows"]) == 3

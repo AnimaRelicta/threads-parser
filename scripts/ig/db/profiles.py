@@ -280,9 +280,14 @@ async def about_fetched(conn: asyncpg.Connection, pid: int) -> bool:
 async def save_about(conn: asyncpg.Connection, pid: int, fields: dict, raw: dict) -> None:
     """Поля окна «Об аккаунте» и всё окно в about_raw; None-поля старое значение не затирают.
 
+    Не Казахстан (is_kz=False): is_target=false и только about_raw.
     «Аккаунт подтверждён» в окне поднимает is_verified в true (обратно в false не сбрасывает)."""
     sets = ["about_raw = $2", "about_fetched_at = now()"]
     args: list = [pid, raw]
+    if fields.get("is_kz") is False:  # не Казахстан: не целевой, колонки окна пустые
+        sets.append("is_target = false")
+        await conn.execute(f"UPDATE profiles SET {', '.join(sets)} WHERE id = $1", *args)
+        return
     for col in ABOUT_COLS:
         if fields.get(col) is not None:
             args.append(fields[col])
