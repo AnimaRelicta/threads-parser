@@ -34,3 +34,9 @@ WHERE NOT EXISTS (SELECT 1 FROM media m WHERE m.post_code = po.code)
   AND (:since::timestamptz IS NULL OR po.taken_at >= :since)
 ORDER BY po.taken_at DESC NULLS LAST
 LIMIT :limit;
+
+
+--name: all-profiles
+SELECT * 
+FROM profiles
+LIMIT 10000;

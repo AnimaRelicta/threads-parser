@@ -21,12 +21,13 @@ LIMIT :limit;
 SELECT * 
 FROM posts 
 ORDER BY "reply_count" desc 
-LIMIT 100000; 
+LIMIT 200000; 
 
 --name: all-profiles
 SELECT * 
 FROM profiles 
-ORDER BY "id" asc 
+WHERE "about_location" like '%Казахстан%'
+ORDER BY "id" asc
 LIMIT 100000;
 
 --name: about-location
